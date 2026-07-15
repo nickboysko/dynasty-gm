@@ -23,6 +23,7 @@ from utils import (
     get_rosters,
     get_value_trends,
     load_settings,
+    prime_years_remaining,
 )
 
 MY_TEAM = "nboysko"
@@ -267,6 +268,32 @@ def _asset_str(assets):
     return " + ".join(f"{a['full_name']} ({a['position']}, {a['value']:,})" for a in assets)
 
 
+def _dynasty_warning(send_assets, recv_assets):
+    """
+    Warns when the prime-seasons math is significantly lopsided.
+    RBs cliff at 27, WRs at 30 — same market value can hide a big future gap.
+    Only fires when the difference is at least 3 seasons (signal, not noise).
+    """
+    send_prime = sum(prime_years_remaining(a) or 0 for a in send_assets if a["position"] in POSITIONS)
+    recv_prime = sum(prime_years_remaining(a) or 0 for a in recv_assets if a["position"] in POSITIONS)
+
+    if send_prime == 0 or recv_prime == 0:
+        return None
+
+    diff = send_prime - recv_prime
+    if diff >= 3:
+        return (
+            f"Dynasty caution: ~{send_prime} prime seasons sent vs ~{recv_prime} received "
+            f"({diff:+d}) -- market may be fair but you're trading future for present"
+        )
+    if diff <= -3:
+        return (
+            f"Dynasty edge: ~{recv_prime} prime seasons received vs ~{send_prime} sent "
+            f"({diff:+d}) -- you gain future value beyond what the market reflects"
+        )
+    return None
+
+
 def _trend_signals(assets, trends):
     """Returns list of trend signal strings for notable movers in a package."""
     signals = []
@@ -287,6 +314,9 @@ def _print_packages(packages, my_s, label, trends=None):
         note_str = "  ** " + "; ".join(notes) if notes else ""
         print(f"  {i}. YOU SEND: {_asset_str(send)} [{sv:,}]")
         print(f"     YOU GET:  {_asset_str(recv)} [{rv:,}]{note_str}")
+        dynasty_warn = _dynasty_warning(send, recv)
+        if dynasty_warn:
+            print(f"     Dynasty:  {dynasty_warn}")
         if trends:
             sell_sigs = _trend_signals(send, trends)
             buy_sigs = _trend_signals(recv, trends)

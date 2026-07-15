@@ -7,6 +7,23 @@ import db
 
 POSITIONS = ["QB", "RB", "WR", "TE"]
 
+# Age at which each position hits its production cliff (modern era averages from dynasty research).
+# RBs cliff at 27-28, WRs at 30-32, TEs similar to WR, QBs latest.
+PRIME_CLIFF_AGE = {"QB": 33, "RB": 27, "WR": 30, "TE": 29}
+
+
+def prime_years_remaining(player):
+    """
+    Estimated seasons until the positional production cliff.
+    Returns None if age or position is unknown/not applicable.
+    RB cliff: 27  |  WR cliff: 30  |  TE cliff: 29  |  QB cliff: 33
+    """
+    pos = player.get("position")
+    age = player.get("age")
+    if not age or pos not in PRIME_CLIFF_AGE:
+        return None
+    return max(0, PRIME_CLIFF_AGE[pos] - int(age))
+
 
 def load_settings(conn):
     rows = conn.execute("SELECT key, value FROM league_settings").fetchall()

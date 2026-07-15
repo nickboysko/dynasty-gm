@@ -17,6 +17,7 @@ from tabulate import tabulate
 import db
 from utils import (
     POSITIONS,
+    PRIME_CLIFF_AGE,
     build_pick_value_table,
     classify_teams,
     compute_pick_assets,
@@ -24,6 +25,7 @@ from utils import (
     get_rosters,
     get_value_trends,
     load_settings,
+    prime_years_remaining,
 )
 from trade_finder import (
     MIN_ASSET_VALUE,
@@ -173,6 +175,19 @@ def main():
             display_packages.append((send_display, recv))
     else:
         display_packages = packages
+
+    # -----------------------------------------------------------------------
+    # Dynasty context for the target
+    # -----------------------------------------------------------------------
+    target_prime = prime_years_remaining(target)
+    if target_prime is not None:
+        cliff = PRIME_CLIFF_AGE.get(pos, "?")
+        age_str = f"age {int(target['age'])}" if target.get("age") else "age unknown"
+        print(f"\nDynasty window: {target['full_name']} ({pos}, {age_str}) -- ~{target_prime} prime seasons remaining (cliff: age {cliff})")
+        if pos == "RB" and target_prime <= 3:
+            print("  Warning: this RB is approaching their production cliff. Consider a shorter commitment.")
+        elif pos == "RB" and target_prime <= 5:
+            print("  Note: RBs cliff ~4 years earlier than WRs. Factor this into how much future value you give up.")
 
     if not display_packages:
         print(f"\nNo fair packages found.")

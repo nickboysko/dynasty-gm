@@ -80,9 +80,21 @@ def ingest_rosters(conn, rosters_data):
     # Rebuild roster_players from scratch each run — roster moves happen frequently
     conn.execute("DELETE FROM roster_players")
 
+    roster_rows = []
+    for r in rosters_data:
+        s = r.get("settings") or {}
+        roster_rows.append((
+            r["roster_id"],
+            r.get("owner_id"),
+            s.get("wins", 0),
+            s.get("losses", 0),
+            s.get("ties", 0),
+            s.get("fpts", 0) or 0,
+        ))
     conn.executemany(
-        "INSERT OR REPLACE INTO rosters (roster_id, owner_id) VALUES (?, ?)",
-        [(r["roster_id"], r.get("owner_id")) for r in rosters_data],
+        "INSERT OR REPLACE INTO rosters (roster_id, owner_id, wins, losses, ties, fpts)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        roster_rows,
     )
 
     player_rows = []
@@ -122,6 +134,34 @@ def ingest_traded_picks(conn, picks_data):
         " VALUES (?, ?, ?, ?)",
         rows,
     )
+
+
+def ingest_transactions(conn, season, transactions_by_week):
+    """Insert or replace all completed transactions across all fetched weeks."""
+    rows = []
+    for week, txns in transactions_by_week.items():
+        for t in txns:
+            if not t.get("transaction_id"):
+                continue
+            rows.append((
+                t["transaction_id"],
+                t.get("type"),
+                t.get("status"),
+                season,
+                week,
+                json.dumps(t.get("roster_ids") or []),
+                json.dumps(t.get("adds") or {}),
+                json.dumps(t.get("drops") or {}),
+                json.dumps(t.get("draft_picks") or []),
+                t.get("created"),
+            ))
+    conn.executemany(
+        "INSERT OR REPLACE INTO transactions"
+        " (transaction_id, type, status, season, week, roster_ids, adds, drops, draft_picks, created)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows)
 
 
 def ingest_fc_values(conn, fc_data, fetched_at):
@@ -197,6 +237,25 @@ def main():
     print("Fetching traded picks...")
     picks_data = sleeper.fetch_traded_picks(LEAGUE_ID)
 
+    time.sleep(2)
+    print("Fetching transaction history...")
+    transactions_by_week = {}
+    try:
+        consecutive_empty = 0
+        for week in range(1, 23):  # covers regular season + playoffs
+            time.sleep(2)
+            txns = sleeper.fetch_transactions(LEAGUE_ID, week)
+            if txns:
+                transactions_by_week[week] = txns
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                if consecutive_empty >= 3:
+                    break
+    except Exception as exc:
+        print(f"  Warning: transaction fetch stopped at week {week}: {exc}")
+        print("  Proceeding with partial or no transaction data.")
+
     # Decide whether to fetch FC values (skip if already fetched today)
     conn = db.get_connection()
     today = datetime.now(timezone.utc).date().isoformat()
@@ -227,6 +286,10 @@ def main():
 
         ingest_traded_picks(conn, picks_data)
         print(f"Ingested {len(picks_data)} traded picks")
+
+        n = ingest_transactions(conn, fmt["season"], transactions_by_week)
+        total_weeks = len(transactions_by_week)
+        print(f"Ingested {n} transactions across {total_weeks} weeks")
 
         if fc_data is not None:
             fetched_at = datetime.now(timezone.utc).isoformat()

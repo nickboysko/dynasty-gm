@@ -3,7 +3,7 @@ import os
 import time
 
 from curl_cffi import requests
-from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
+from curl_cffi.requests.exceptions import RequestsError as CurlError
 
 BASE_URL = "https://api.sleeper.app/v1"
 PLAYERS_CACHE = os.path.join(os.path.dirname(__file__), "players_cache.json")
@@ -22,7 +22,7 @@ def _get(path):
             resp = requests.get(url, impersonate="chrome", timeout=30)
             resp.raise_for_status()
             return resp.json()
-        except CurlConnectionError as exc:
+        except CurlError as exc:
             last_exc = exc
     raise last_exc
 
@@ -41,6 +41,11 @@ def fetch_users(league_id):
 
 def fetch_traded_picks(league_id):
     return _get(f"/league/{league_id}/traded_picks")
+
+
+def fetch_transactions(league_id, week):
+    """Returns list of transactions for the given week (1-indexed NFL week)."""
+    return _get(f"/league/{league_id}/transactions/{week}")
 
 
 def fetch_players():

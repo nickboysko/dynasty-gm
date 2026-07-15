@@ -51,6 +51,21 @@ def init_db():
                 PRIMARY KEY (season, round, original_roster_id)
             );
 
+            -- Sleeper trade/waiver/FA transactions, keyed by transaction_id.
+            -- Rebuilt each ingest run via INSERT OR REPLACE.
+            CREATE TABLE IF NOT EXISTS transactions (
+                transaction_id  TEXT PRIMARY KEY,
+                type            TEXT,
+                status          TEXT,
+                season          TEXT,
+                week            INTEGER,
+                roster_ids      TEXT,   -- JSON array of roster_ids involved
+                adds            TEXT,   -- JSON: player_id -> new_roster_id
+                drops           TEXT,   -- JSON: player_id -> old_roster_id
+                draft_picks     TEXT,   -- JSON array of pick objects
+                created         INTEGER -- Unix timestamp ms
+            );
+
             -- Append-only: never UPDATE or DELETE rows. Enables value trend tracking later.
             CREATE TABLE IF NOT EXISTS fc_values (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,4 +81,16 @@ def init_db():
                 value TEXT NOT NULL
             );
         """)
+    # Schema migrations — idempotent, safe to re-run
+    for col_sql in [
+        "ALTER TABLE rosters ADD COLUMN wins    INTEGER DEFAULT 0",
+        "ALTER TABLE rosters ADD COLUMN losses  INTEGER DEFAULT 0",
+        "ALTER TABLE rosters ADD COLUMN ties    INTEGER DEFAULT 0",
+        "ALTER TABLE rosters ADD COLUMN fpts    REAL    DEFAULT 0",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except Exception:
+            pass  # column already exists
+
     conn.close()

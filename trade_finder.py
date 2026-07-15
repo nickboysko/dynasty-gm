@@ -8,7 +8,6 @@ Team name is matched case-insensitively as a substring of team/display names.
 
 import sys
 from collections import defaultdict
-from datetime import date
 from itertools import combinations
 
 from tabulate import tabulate
@@ -18,8 +17,11 @@ from utils import (
     POSITIONS,
     assign_starters,
     build_pick_value_table,
+    classify_teams,
+    compute_pick_assets,
     get_latest_fc_values,
     get_rosters,
+    get_value_trends,
     load_settings,
 )
 
@@ -56,51 +58,6 @@ def find_my_roster(rosters, team_arg):
 
 
 # ---------------------------------------------------------------------------
-# Pick capital as tradeable assets
-# ---------------------------------------------------------------------------
-
-def compute_pick_assets(conn, rosters, draft_rounds, pick_values):
-    """Returns dict: roster_id -> list of pick asset dicts."""
-    roster_ids = [r["roster_id"] for r in rosters]
-    team_by_rid = {r["roster_id"]: r["team"] for r in rosters}
-
-    start_year = date.today().year + 1
-    future_seasons = [str(y) for y in range(start_year, start_year + 3)]
-
-    ownership = {
-        (season, rnd, rid): rid
-        for season in future_seasons
-        for rnd in range(1, draft_rounds + 1)
-        for rid in roster_ids
-    }
-
-    traded = conn.execute(
-        "SELECT season, round, original_roster_id, current_roster_id FROM traded_picks"
-    ).fetchall()
-    for t in traded:
-        key = (t["season"], t["round"], t["original_roster_id"])
-        if key in ownership:
-            ownership[key] = t["current_roster_id"]
-
-    team_picks = defaultdict(list)
-    for (season, rnd, original), current in ownership.items():
-        val = pick_values.get((season, rnd), 0)
-        orig_team = team_by_rid.get(original, str(original))
-        label = f"{season} Rd{rnd}" if original == current else f"{season} Rd{rnd} ({orig_team})"
-        team_picks[current].append({
-            "player_id": f"PICK_{season}_{rnd}_{original}",
-            "full_name": label,
-            "position": "PICK",
-            "team": None,
-            "age": None,
-            "slot": "active",
-            "value": val,
-        })
-
-    return team_picks
-
-
-# ---------------------------------------------------------------------------
 # Positional surplus / deficit scoring
 # ---------------------------------------------------------------------------
 
@@ -129,50 +86,6 @@ def compute_positional_surplus(rosters, starting_slots):
         r["roster_id"]: {pos: slot_starter_vals[r["roster_id"]].get(pos, 0) - medians[pos] for pos in POSITIONS}
         for r in rosters
     }
-
-
-# ---------------------------------------------------------------------------
-# Team classification (Contending / Middle / Rebuilding)
-# ---------------------------------------------------------------------------
-
-def classify_teams(rosters, starting_slots):
-    """
-    Returns dict: roster_id -> {"score": float 0-1, "tier": str}
-
-    Score is weighted: 60% starter value rank + 40% total roster value rank.
-    High score = contending; low score = rebuilding.
-    """
-    starter_vals = {}
-    for r in rosters:
-        active = [p for p in r["players"] if p["slot"] == "active"]
-        starters, _ = assign_starters(active, starting_slots)
-        starter_vals[r["roster_id"]] = sum(p["value"] for p in starters)
-
-    total_vals = {r["roster_id"]: sum(p["value"] for p in r["players"]) for r in rosters}
-
-    n = len(rosters)
-    sv_sorted = sorted(starter_vals, key=lambda rid: starter_vals[rid], reverse=True)
-    tv_sorted = sorted(total_vals, key=lambda rid: total_vals[rid], reverse=True)
-    sv_rank = {rid: i for i, rid in enumerate(sv_sorted)}
-    tv_rank = {rid: i for i, rid in enumerate(tv_sorted)}
-
-    result = {}
-    for r in rosters:
-        rid = r["roster_id"]
-        sv_score = 1.0 - sv_rank[rid] / (n - 1) if n > 1 else 1.0
-        tv_score = 1.0 - tv_rank[rid] / (n - 1) if n > 1 else 1.0
-        score = sv_score * 0.6 + tv_score * 0.4
-
-        if score >= CONTEND_THRESHOLD:
-            tier = "Contending"
-        elif score <= REBUILD_THRESHOLD:
-            tier = "Rebuilding"
-        else:
-            tier = "Middle"
-
-        result[rid] = {"score": score, "tier": tier}
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +267,19 @@ def _asset_str(assets):
     return " + ".join(f"{a['full_name']} ({a['position']}, {a['value']:,})" for a in assets)
 
 
-def _print_packages(packages, my_s, label):
-    print(f"\n  {label} (±{int(TOLERANCE * 100)}% tolerance, {int(CONSOLIDATION_PREMIUM * 100)}% consolidation premium):")
+def _trend_signals(assets, trends):
+    """Returns list of trend signal strings for notable movers in a package."""
+    signals = []
+    for a in assets:
+        d = trends.get(a["player_id"])
+        if d and abs(d["delta_pct"]) >= 3 and a["position"] in POSITIONS:
+            arrow = "↑" if d["delta_pct"] > 0 else "↓"
+            signals.append(f"{a['full_name'].split()[1] if ' ' in a['full_name'] else a['full_name']} {arrow}{abs(d['delta_pct']):.1f}%")
+    return signals
+
+
+def _print_packages(packages, my_s, label, trends=None):
+    print(f"\n  {label} (+/-{int(TOLERANCE * 100)}% tolerance, {int(CONSOLIDATION_PREMIUM * 100)}% consolidation premium):")
     for i, (send, recv) in enumerate(packages, 1):
         sv = sum(a["value"] for a in send)
         rv = sum(a["value"] for a in recv)
@@ -363,14 +287,25 @@ def _print_packages(packages, my_s, label):
         note_str = "  ** " + "; ".join(notes) if notes else ""
         print(f"  {i}. YOU SEND: {_asset_str(send)} [{sv:,}]")
         print(f"     YOU GET:  {_asset_str(recv)} [{rv:,}]{note_str}")
+        if trends:
+            sell_sigs = _trend_signals(send, trends)
+            buy_sigs = _trend_signals(recv, trends)
+            sig_parts = []
+            if sell_sigs:
+                sig_parts.append("Sell high: " + ", ".join(sell_sigs))
+            if buy_sigs:
+                sig_parts.append("Buy low: " + ", ".join(buy_sigs))
+            if sig_parts:
+                print(f"     Trend:    {' | '.join(sig_parts)}")
 
 
-def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters):
+def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, trends=None):
     my_rid = my_roster["roster_id"]
     my_s = surplus[my_rid]
     my_tier = tiers[my_rid]
 
-    print(f"\n=== Trade Finder: {my_roster['team']} [{my_tier['tier']}] ===")
+    record_tag = f" {my_tier['wins']}-{my_tier['losses']}" if my_tier.get("record_used") else ""
+    print(f"\n=== Trade Finder: {my_roster['team']} [{my_tier['tier']}{record_tag}] ===")
 
     pos_rows = [[pos, f"{my_s[pos]:+,.0f}"] for pos in POSITIONS]
     print("\nYour positional surplus vs. league median (starters only):")
@@ -407,7 +342,7 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters):
             print("  No fair packages found within value tolerance.")
             continue
 
-        _print_packages(packages, my_s, "Suggested packages")
+        _print_packages(packages, my_s, "Suggested packages", trends)
 
     # -----------------------------------------------------------------------
     # Section 2: Rebuild targets
@@ -471,7 +406,75 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters):
             ]
             display_packages.append((send_d, recv_d))
 
-        _print_packages(display_packages, my_s, label)
+        _print_packages(display_packages, my_s, label, trends)
+
+    # -----------------------------------------------------------------------
+    # Section 3: Sell-side market (reverse trade finder)
+    # -----------------------------------------------------------------------
+    print(f"\n{'=' * 60}")
+    print("SELL-SIDE MARKET - What You Could Get for Each Asset")
+    print("For each of your top players: who wants them, what's fair.")
+    print(f"{'=' * 60}")
+
+    my_sell_candidates = sorted(
+        [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE],
+        key=lambda x: x["value"], reverse=True,
+    )[:8]
+
+    for player in my_sell_candidates:
+        pos = player["position"]
+
+        trend_str = ""
+        if trends:
+            d = trends.get(player["player_id"])
+            if d and abs(d["delta_pct"]) >= 3:
+                arrow = "↑" if d["delta_pct"] > 0 else "↓"
+                trend_str = f"  {arrow}{abs(d['delta_pct']):.1f}% (7d)"
+
+        needy = sorted(
+            [(surplus[r["roster_id"]].get(pos, 0), r)
+             for r in rosters if r["roster_id"] != my_rid
+             and surplus[r["roster_id"]].get(pos, 0) < 0],
+            key=lambda x: x[0],
+        )
+
+        if not needy:
+            print(f"\n  {player['full_name']} ({pos}, {player['value']:,}){trend_str} — no teams have a {pos} deficit")
+            continue
+
+        print(f"\n--- {player['full_name']} ({pos}, {player['value']:,}){trend_str} ---")
+        print(f"  {len(needy)} team(s) short at {pos} and could want this player:\n")
+
+        shown = 0
+        for deficit, partner in needy[:4]:
+            prid = partner["roster_id"]
+            their_tier = tiers[prid]["tier"]
+            their_players = [p for p in partner["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+            their_picks = [p for p in pick_assets.get(prid, []) if p["value"] >= MIN_ASSET_VALUE]
+            their_assets = sorted(their_players + their_picks, key=lambda x: x["value"], reverse=True)
+
+            packages = generate_packages([player], their_assets, my_s)
+            if not packages:
+                continue
+
+            shown += 1
+            record_str = ""
+            info = tiers[prid]
+            if info.get("record_used"):
+                record_str = f" {info['wins']}-{info['losses']}"
+            print(f"  {partner['team']} [{their_tier}{record_str}] (their {pos} deficit: {deficit:+,.0f})")
+            for send, recv in packages[:2]:
+                rv = sum(a["value"] for a in recv)
+                sv = sum(a["value"] for a in send)
+                print(f"    YOU GET:  {_asset_str(recv)} [{rv:,}]")
+                print(f"    YOU SEND: {_asset_str(send)} [{sv:,}]")
+                if trends:
+                    sigs = _trend_signals(recv, trends)
+                    if sigs:
+                        print(f"    Buy low:  {', '.join(sigs)}")
+
+        if shown == 0:
+            print(f"  Teams have {pos} deficit but can't offer fair value right now.")
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +484,7 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters):
 def main():
     team_arg = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else MY_TEAM
 
+    db.init_db()
     conn = db.get_connection()
     settings = load_settings(conn)
     fc_values = get_latest_fc_values(conn)
@@ -493,7 +497,11 @@ def main():
     tiers = classify_teams(rosters, settings["starting_slots"])
     partners = rank_trade_partners(my_roster, rosters, surplus)
 
-    print_report(my_roster, partners, surplus, pick_assets, tiers, rosters)
+    trends = get_value_trends(conn, days=7)
+    if trends:
+        print(f"  (Value trend data available: {len(trends)} movers in the past 7 days)")
+
+    print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, trends)
 
     conn.close()
 

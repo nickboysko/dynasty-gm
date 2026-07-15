@@ -7,8 +7,11 @@ from utils import (
     POSITIONS,
     assign_starters,
     build_pick_value_table,
+    classify_teams,
+    compute_pick_assets,
     get_latest_fc_values,
     get_rosters,
+    get_value_trends,
     load_settings,
 )
 
@@ -169,11 +172,62 @@ def section_pick_capital(conn, rosters, fc_values, draft_rounds, league_season):
         print("  Pick counts still reflect traded pick ownership.")
 
 
+def section_value_movers(conn):
+    """6. Top value risers and fallers over the past 7 days — buy low / sell high signals."""
+    print("\n=== 6. Value Movers (7-Day Trend) ===")
+    trends = get_value_trends(conn, days=7)
+
+    if not trends:
+        print("  No historical data yet — run ingest.py daily for at least 2 days to see trends.")
+        return
+
+    skill = {pid: d for pid, d in trends.items() if d["position"] in POSITIONS}
+    risers = sorted(skill.items(), key=lambda x: x[1]["delta_pct"], reverse=True)[:10]
+    fallers = sorted(skill.items(), key=lambda x: x[1]["delta_pct"])[:10]
+
+    up = [(d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"+{d['delta_pct']:.1f}%") for _, d in risers if d["delta_pct"] > 0]
+    if up:
+        print("\nTop Risers — consider SELLING HIGH:")
+        print(tabulate(up, headers=["Player", "Pos", "7d Ago", "Now", "Change"], tablefmt="simple"))
+
+    down = [(d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"{d['delta_pct']:.1f}%") for _, d in fallers if d["delta_pct"] < 0]
+    if down:
+        print("\nTop Fallers — consider BUYING LOW:")
+        print(tabulate(down, headers=["Player", "Pos", "7d Ago", "Now", "Change"], tablefmt="simple"))
+
+
+def section_strategy(rosters, starting_slots, pick_assets):
+    """7. Win-now vs. rebuild assessment for every team."""
+    print("\n=== 7. Strategy Assessment ===")
+    tiers = classify_teams(rosters, starting_slots)
+    use_record = any(info.get("record_used") for info in tiers.values())
+
+    rows = []
+    for r in rosters:
+        rid = r["roster_id"]
+        info = tiers[rid]
+        active = [p for p in r["players"] if p["slot"] == "active"]
+        starters, _ = assign_starters(active, starting_slots)
+        sv = sum(p["value"] for p in starters)
+        tv = sum(p["value"] for p in r["players"])
+        pv = sum(p["value"] for p in pick_assets.get(rid, []))
+        record = f"{r['wins']}-{r['losses']}" if use_record else "-"
+        rows.append([r["team"], info["tier"], f"{info['score']:.0%}", record, f"{sv:,}", f"{tv:,}", f"{pv:,}"])
+
+    rows.sort(key=lambda x: x[2], reverse=True)
+    headers = ["Team", "Tier", "Score", "Record", "Starter Val", "Total Val", "Pick Capital"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
+    basis = "40% starter rank + 20% total rank + 40% win rate" if use_record else "60% starter rank + 40% total rank (offseason — no record)"
+    print(f"\nTier basis: {basis}")
+    print("Contending (≥60%) = compete now  |  Middle = flexible  |  Rebuilding (≤35%) = accumulate picks")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
+    db.init_db()
     conn = db.get_connection()
     settings = load_settings(conn)
     fc_values = get_latest_fc_values(conn)
@@ -188,11 +242,16 @@ def main():
     print(f"Format: {fmt_str}")
     print(f"Starting slots ({len(slots)}): {', '.join(slots)}")
 
+    pick_values = build_pick_value_table(fc_values)
+    pick_assets = compute_pick_assets(conn, rosters, settings["draft_rounds"], pick_values)
+
     section_total_value(rosters)
     section_position_value(rosters)
     section_starter_vs_bench(rosters, slots)
     section_age(rosters)
     section_pick_capital(conn, rosters, fc_values, settings["draft_rounds"], settings["season"])
+    section_value_movers(conn)
+    section_strategy(rosters, slots, pick_assets)
 
     conn.close()
 

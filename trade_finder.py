@@ -23,12 +23,20 @@ from utils import (
     load_settings,
 )
 
-MY_TEAM = "nboysko"       # default team when no argument supplied
-MIN_ASSET_VALUE = 500     # ignore players/picks below this value in packages
+MY_TEAM = "nboysko"
 
-TOLERANCE = 0.22   # max value imbalance considered "fair" (22%)
-MAX_PARTNERS = 5   # top trade partners to display
-MAX_PACKAGES = 3   # trade packages to show per partner
+MIN_ASSET_VALUE = 500          # ignore players/picks below this value in packages
+CONSOLIDATION_PREMIUM = 0.10   # 10% premium to the side holding fewer, concentrated assets
+SECONDARY_ASSET_FLOOR = 0.20   # 2nd asset in a combo must be ≥ 20% of the top asset's value
+PICK_PREMIUM_REBUILD = 0.20    # picks effectively worth 20% more to rebuilding teams
+PLAYER_DISCOUNT_REBUILD = 0.10 # rebuilders willing to sell players at a 10% discount
+
+TOLERANCE = 0.22
+MAX_PARTNERS = 5
+MAX_PACKAGES = 3
+
+CONTEND_THRESHOLD = 0.60
+REBUILD_THRESHOLD = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +60,7 @@ def find_my_roster(rosters, team_arg):
 # ---------------------------------------------------------------------------
 
 def compute_pick_assets(conn, rosters, draft_rounds, pick_values):
-    """
-    Returns dict: roster_id -> list of pick asset dicts.
-    Each pick asset looks like a player with position='PICK'.
-    """
+    """Returns dict: roster_id -> list of pick asset dicts."""
     roster_ids = [r["roster_id"] for r in rosters]
     team_by_rid = {r["roster_id"]: r["team"] for r in rosters}
 
@@ -102,10 +107,7 @@ def compute_pick_assets(conn, rosters, draft_rounds, pick_values):
 def compute_positional_surplus(rosters, starting_slots):
     """
     Returns dict: roster_id -> {pos: surplus_value} for POSITIONS.
-
     Surplus = (my starter value at pos) - (league median starter value at pos).
-    Positive = strength; negative = weakness.
-    Only skill positions (QB/RB/WR/TE) are scored.
     """
     slot_starter_vals = {}
     for r in rosters:
@@ -123,11 +125,54 @@ def compute_positional_surplus(rosters, starting_slots):
         n = len(vals)
         medians[pos] = (vals[n // 2 - 1] + vals[n // 2]) / 2 if n % 2 == 0 else vals[n // 2]
 
-    surplus = {}
+    return {
+        r["roster_id"]: {pos: slot_starter_vals[r["roster_id"]].get(pos, 0) - medians[pos] for pos in POSITIONS}
+        for r in rosters
+    }
+
+
+# ---------------------------------------------------------------------------
+# Team classification (Contending / Middle / Rebuilding)
+# ---------------------------------------------------------------------------
+
+def classify_teams(rosters, starting_slots):
+    """
+    Returns dict: roster_id -> {"score": float 0-1, "tier": str}
+
+    Score is weighted: 60% starter value rank + 40% total roster value rank.
+    High score = contending; low score = rebuilding.
+    """
+    starter_vals = {}
+    for r in rosters:
+        active = [p for p in r["players"] if p["slot"] == "active"]
+        starters, _ = assign_starters(active, starting_slots)
+        starter_vals[r["roster_id"]] = sum(p["value"] for p in starters)
+
+    total_vals = {r["roster_id"]: sum(p["value"] for p in r["players"]) for r in rosters}
+
+    n = len(rosters)
+    sv_sorted = sorted(starter_vals, key=lambda rid: starter_vals[rid], reverse=True)
+    tv_sorted = sorted(total_vals, key=lambda rid: total_vals[rid], reverse=True)
+    sv_rank = {rid: i for i, rid in enumerate(sv_sorted)}
+    tv_rank = {rid: i for i, rid in enumerate(tv_sorted)}
+
+    result = {}
     for r in rosters:
         rid = r["roster_id"]
-        surplus[rid] = {pos: slot_starter_vals[rid].get(pos, 0) - medians[pos] for pos in POSITIONS}
-    return surplus
+        sv_score = 1.0 - sv_rank[rid] / (n - 1) if n > 1 else 1.0
+        tv_score = 1.0 - tv_rank[rid] / (n - 1) if n > 1 else 1.0
+        score = sv_score * 0.6 + tv_score * 0.4
+
+        if score >= CONTEND_THRESHOLD:
+            tier = "Contending"
+        elif score <= REBUILD_THRESHOLD:
+            tier = "Rebuilding"
+        else:
+            tier = "Middle"
+
+        result[rid] = {"score": score, "tier": tier}
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +181,8 @@ def compute_positional_surplus(rosters, starting_slots):
 
 def rank_trade_partners(my_roster, rosters, surplus):
     """
-    Score = sum over POSITIONS of (-my_surplus[pos]) * their_surplus[pos].
-    High score = they have what I lack and I have what they lack.
+    Complementarity score = sum over POSITIONS of (-my_surplus[pos]) * their_surplus[pos].
+    High score = they have what I lack and vice versa.
     """
     my_rid = my_roster["roster_id"]
     my_s = surplus[my_rid]
@@ -152,16 +197,50 @@ def rank_trade_partners(my_roster, rosters, surplus):
     return scores
 
 
+def find_rebuild_targets(my_roster, rosters, tiers):
+    """
+    Returns rebuilding/middle teams sorted by how rebuild-ready they are (lowest score first).
+    These are sell candidates — offer them picks for their players.
+    """
+    my_rid = my_roster["roster_id"]
+    targets = []
+    for r in rosters:
+        rid = r["roster_id"]
+        if rid == my_rid:
+            continue
+        info = tiers[rid]
+        if info["tier"] in ("Rebuilding", "Middle"):
+            targets.append((info["score"], r))
+    targets.sort(key=lambda x: x[0])
+    return targets
+
+
 # ---------------------------------------------------------------------------
 # Package generation
 # ---------------------------------------------------------------------------
 
-def _is_fair(send_val, recv_val):
-    if send_val == 0 and recv_val == 0:
-        return True
-    if send_val == 0 or recv_val == 0:
+def _is_fair(send_assets, recv_assets):
+    """
+    Value-balance check with consolidation premium.
+    The side with fewer concentrated assets gets a 10% effective value boost,
+    reflecting that a single elite player is worth more than its raw value
+    when compared to a spread of equivalent value.
+    """
+    sv = sum(a["value"] for a in send_assets)
+    rv = sum(a["value"] for a in recv_assets)
+
+    if sv == 0 or rv == 0:
         return False
-    ratio = send_val / recv_val
+
+    n_s = len(send_assets)
+    n_r = len(recv_assets)
+
+    if n_s < n_r:
+        sv *= (1 + CONSOLIDATION_PREMIUM)
+    elif n_r < n_s:
+        rv *= (1 + CONSOLIDATION_PREMIUM)
+
+    ratio = sv / rv
     return (1 - TOLERANCE) <= ratio <= (1 + TOLERANCE)
 
 
@@ -169,32 +248,45 @@ def _all_picks(assets):
     return all(a["position"] == "PICK" for a in assets)
 
 
+def _has_quality_depth(assets):
+    """Every asset in a combo must be >= 20% of the highest-value asset in that combo."""
+    if len(assets) <= 1:
+        return True
+    values = sorted([a["value"] for a in assets], reverse=True)
+    return all(v >= values[0] * SECONDARY_ASSET_FLOOR for v in values[1:])
+
+
 def generate_packages(send_assets, recv_assets, my_surplus):
     """
-    Try 1-for-1, 2-for-1, 1-for-2, and 2-for-2 combinations.
-    Filters trivial all-pick equal-value swaps (pointless same-round exchanges).
-    Sorts by:
-      1. Positional fit: reward receiving deficit positions, sending surplus positions
-      2. Then by closeness to even value
-    Capped at MAX_PACKAGES.
+    Generates fair trade packages (1-for-1, 2-for-1, 1-for-2, 2-for-2).
+
+    Filters:
+    - Secondary asset floor: no asset in a combo may be < 20% of the combo's top asset
+    - Trivial pick-for-pick swaps of equal value
+    - Consolidation premium applied in value balance check
+
+    Sorted by positional fit (receive deficit positions, send surplus positions),
+    then by closeness to even value. Capped at MAX_PACKAGES.
     """
     results = []
 
     for s_size, r_size in [(1, 1), (2, 1), (1, 2), (2, 2)]:
         for s_combo in combinations(send_assets, s_size):
+            if not _has_quality_depth(list(s_combo)):
+                continue
             sv = sum(a["value"] for a in s_combo)
             if sv == 0:
                 continue
             for r_combo in combinations(recv_assets, r_size):
+                if not _has_quality_depth(list(r_combo)):
+                    continue
                 rv = sum(a["value"] for a in r_combo)
                 if rv == 0:
                     continue
-                # Skip trivial pick-for-pick swaps with equal value
                 if _all_picks(list(s_combo)) and _all_picks(list(r_combo)) and sv == rv:
                     continue
-                if _is_fair(sv, rv):
+                if _is_fair(list(s_combo), list(r_combo)):
                     imbalance = abs(sv - rv) / max(sv, rv)
-                    # Fit score: receive what I lack, send what I have extra
                     fit = (
                         sum(-my_surplus.get(a["position"], 0) for a in r_combo if a["position"] in POSITIONS)
                         + sum(my_surplus.get(a["position"], 0) for a in s_combo if a["position"] in POSITIONS)
@@ -217,6 +309,21 @@ def generate_packages(send_assets, recv_assets, my_surplus):
             break
 
     return unique
+
+
+# ---------------------------------------------------------------------------
+# Rebuild-context asset adjustment
+# ---------------------------------------------------------------------------
+
+def _rebuild_adjusted_assets(my_picks, their_players):
+    """
+    Returns asset lists with rebuild-context value adjustments:
+    - My picks: inflated 20% (rebuilders prize future capital above face value)
+    - Their players: discounted 10% (rebuilders are willing sellers)
+    """
+    adj_picks = [{**p, "value": int(p["value"] * (1 + PICK_PREMIUM_REBUILD))} for p in my_picks]
+    adj_players = [{**p, "value": int(p["value"] * (1 - PLAYER_DISCOUNT_REBUILD))} for p in their_players]
+    return adj_picks, adj_players
 
 
 # ---------------------------------------------------------------------------
@@ -247,29 +354,45 @@ def _asset_str(assets):
     return " + ".join(f"{a['full_name']} ({a['position']}, {a['value']:,})" for a in assets)
 
 
-def print_report(my_roster, partners, surplus, pick_assets):
+def _print_packages(packages, my_s, label):
+    print(f"\n  {label} (±{int(TOLERANCE * 100)}% tolerance, {int(CONSOLIDATION_PREMIUM * 100)}% consolidation premium):")
+    for i, (send, recv) in enumerate(packages, 1):
+        sv = sum(a["value"] for a in send)
+        rv = sum(a["value"] for a in recv)
+        notes = _pos_annotations(my_s, send, recv)
+        note_str = "  ** " + "; ".join(notes) if notes else ""
+        print(f"  {i}. YOU SEND: {_asset_str(send)} [{sv:,}]")
+        print(f"     YOU GET:  {_asset_str(recv)} [{rv:,}]{note_str}")
+
+
+def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters):
     my_rid = my_roster["roster_id"]
     my_s = surplus[my_rid]
+    my_tier = tiers[my_rid]
 
-    print(f"\n=== Trade Finder: {my_roster['team']} ===")
+    print(f"\n=== Trade Finder: {my_roster['team']} [{my_tier['tier']}] ===")
 
     pos_rows = [[pos, f"{my_s[pos]:+,.0f}"] for pos in POSITIONS]
     print("\nYour positional surplus vs. league median (starters only):")
     print(tabulate(pos_rows, headers=["Pos", "Surplus"], tablefmt="simple"))
 
-    if not partners:
-        print("\nNo complementary trade partners found.")
-        return
-
     my_players = [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
     my_picks = [p for p in pick_assets.get(my_rid, []) if p["value"] >= MIN_ASSET_VALUE]
     my_assets = sorted(my_players + my_picks, key=lambda x: x["value"], reverse=True)
 
+    # -----------------------------------------------------------------------
+    # Section 1: Positional partners
+    # -----------------------------------------------------------------------
+    print(f"\n{'=' * 60}")
+    print("POSITIONAL TRADE PARTNERS")
+    print(f"{'=' * 60}")
+
     for rank, (score, partner) in enumerate(partners[:MAX_PARTNERS], 1):
         prid = partner["roster_id"]
         their_s = surplus[prid]
+        their_tier = tiers[prid]["tier"]
 
-        print(f"\n--- Partner #{rank}: {partner['team']} (complementarity score: {score:,.0f}) ---")
+        print(f"\n--- #{rank}: {partner['team']} [{their_tier}] (fit score: {score:,.0f}) ---")
 
         their_pos_rows = [[pos, f"{their_s[pos]:+,.0f}"] for pos in POSITIONS]
         print(tabulate(their_pos_rows, headers=["Pos", "Surplus"], tablefmt="simple"))
@@ -284,14 +407,71 @@ def print_report(my_roster, partners, surplus, pick_assets):
             print("  No fair packages found within value tolerance.")
             continue
 
-        print(f"\n  Suggested packages (tolerance ±{int(TOLERANCE * 100)}%):")
-        for i, (send, recv) in enumerate(packages, 1):
-            sv = sum(a["value"] for a in send)
-            rv = sum(a["value"] for a in recv)
-            notes = _pos_annotations(my_s, send, recv)
-            note_str = "  ** " + "; ".join(notes) if notes else ""
-            print(f"  {i}. YOU SEND: {_asset_str(send)} [{sv:,}]")
-            print(f"     YOU GET:  {_asset_str(recv)} [{rv:,}]{note_str}")
+        _print_packages(packages, my_s, "Suggested packages")
+
+    # -----------------------------------------------------------------------
+    # Section 2: Rebuild targets
+    # -----------------------------------------------------------------------
+    rebuild_targets = find_rebuild_targets(my_roster, rosters, tiers)
+    shown_rids = {partner["roster_id"] for _, partner in partners[:MAX_PARTNERS]}
+    rebuild_targets = [(s, r) for s, r in rebuild_targets if r["roster_id"] not in shown_rids]
+
+    if not rebuild_targets:
+        return
+
+    print(f"\n{'=' * 60}")
+    print(f"REBUILD TARGETS  (picks boosted +{int(PICK_PREMIUM_REBUILD * 100)}%, their players discounted -{int(PLAYER_DISCOUNT_REBUILD * 100)}%)")
+    print("These teams should be selling players for future capital.")
+    print(f"{'=' * 60}")
+
+    for contend_score, partner in rebuild_targets[:3]:
+        prid = partner["roster_id"]
+        their_tier = tiers[prid]["tier"]
+        their_s = surplus[prid]
+
+        print(f"\n--- {partner['team']} [{their_tier}] (contend score: {contend_score:.0%}) ---")
+
+        their_pos_rows = [[pos, f"{their_s[pos]:+,.0f}"] for pos in POSITIONS]
+        print(tabulate(their_pos_rows, headers=["Pos", "Surplus"], tablefmt="simple"))
+
+        their_players = [p for p in partner["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+        adj_picks, adj_their_players = _rebuild_adjusted_assets(my_picks, their_players)
+        recv_assets = sorted(adj_their_players, key=lambda x: x["value"], reverse=True)
+
+        # Try picks-only send first — that's the point of targeting rebuilders
+        pick_send = sorted(adj_picks, key=lambda x: x["value"], reverse=True)
+        packages = generate_packages(pick_send, recv_assets, my_s) if pick_send else []
+        pick_only = bool(packages)
+
+        # Fall back to picks + surplus players if no pick-only deals exist
+        if not packages:
+            mixed_send = sorted(my_players + adj_picks, key=lambda x: x["value"], reverse=True)
+            packages = generate_packages(mixed_send, recv_assets, my_s)
+
+        if not packages:
+            print("  No fair packages found.")
+            continue
+
+        label = (
+            f"Pick offers (picks boosted +{int(PICK_PREMIUM_REBUILD * 100)}%, their players discounted -{int(PLAYER_DISCOUNT_REBUILD * 100)}%)"
+            if pick_only else
+            f"Packages — no pick-only deals found; showing mixed (picks boosted +{int(PICK_PREMIUM_REBUILD * 100)}%)"
+        )
+
+        # Restore original face values for display
+        display_packages = []
+        for send, recv in packages:
+            send_d = [
+                {**a, "value": int(a["value"] / (1 + PICK_PREMIUM_REBUILD))} if a["position"] == "PICK" else a
+                for a in send
+            ]
+            recv_d = [
+                {**a, "value": int(a["value"] / (1 - PLAYER_DISCOUNT_REBUILD))} if a["position"] != "PICK" else a
+                for a in recv
+            ]
+            display_packages.append((send_d, recv_d))
+
+        _print_packages(display_packages, my_s, label)
 
 
 # ---------------------------------------------------------------------------
@@ -310,9 +490,10 @@ def main():
     my_roster = find_my_roster(rosters, team_arg)
     pick_assets = compute_pick_assets(conn, rosters, settings["draft_rounds"], pick_values)
     surplus = compute_positional_surplus(rosters, settings["starting_slots"])
+    tiers = classify_teams(rosters, settings["starting_slots"])
     partners = rank_trade_partners(my_roster, rosters, surplus)
 
-    print_report(my_roster, partners, surplus, pick_assets)
+    print_report(my_roster, partners, surplus, pick_assets, tiers, rosters)
 
     conn.close()
 

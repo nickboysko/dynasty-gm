@@ -1,7 +1,8 @@
 """
-Usage: python trade_finder.py <team_name>
+Usage: python trade_finder.py [team_name]
 
 Identifies the best trade partners for a given team and suggests fair packages.
+Defaults to MY_TEAM if no argument is provided.
 Team name is matched case-insensitively as a substring of team/display names.
 """
 
@@ -21,6 +22,9 @@ from utils import (
     get_rosters,
     load_settings,
 )
+
+MY_TEAM = "nboysko"       # default team when no argument supplied
+MIN_ASSET_VALUE = 500     # ignore players/picks below this value in packages
 
 TOLERANCE = 0.22   # max value imbalance considered "fair" (22%)
 MAX_PARTNERS = 5   # top trade partners to display
@@ -257,8 +261,8 @@ def print_report(my_roster, partners, surplus, pick_assets):
         print("\nNo complementary trade partners found.")
         return
 
-    my_players = [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] > 0]
-    my_picks = pick_assets.get(my_rid, [])
+    my_players = [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+    my_picks = [p for p in pick_assets.get(my_rid, []) if p["value"] >= MIN_ASSET_VALUE]
     my_assets = sorted(my_players + my_picks, key=lambda x: x["value"], reverse=True)
 
     for rank, (score, partner) in enumerate(partners[:MAX_PARTNERS], 1):
@@ -270,8 +274,8 @@ def print_report(my_roster, partners, surplus, pick_assets):
         their_pos_rows = [[pos, f"{their_s[pos]:+,.0f}"] for pos in POSITIONS]
         print(tabulate(their_pos_rows, headers=["Pos", "Surplus"], tablefmt="simple"))
 
-        their_players = [p for p in partner["players"] if p["position"] in POSITIONS and p["value"] > 0]
-        their_picks = pick_assets.get(prid, [])
+        their_players = [p for p in partner["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+        their_picks = [p for p in pick_assets.get(prid, []) if p["value"] >= MIN_ASSET_VALUE]
         their_assets = sorted(their_players + their_picks, key=lambda x: x["value"], reverse=True)
 
         packages = generate_packages(my_assets, their_assets, my_s)
@@ -295,10 +299,7 @@ def print_report(my_roster, partners, surplus, pick_assets):
 # ---------------------------------------------------------------------------
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: python trade_finder.py <team_name>")
-
-    team_arg = " ".join(sys.argv[1:])
+    team_arg = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else MY_TEAM
 
     conn = db.get_connection()
     settings = load_settings(conn)

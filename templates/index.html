@@ -8,31 +8,41 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>Trade Builder</h1>
-    <div class="opponent-picker">
+    <h1>Dynasty GM</h1>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="trade-tab">Trade Builder</button>
+      <button class="tab-btn" data-tab="report-tab">Report</button>
+    </nav>
+    <div class="opponent-picker" id="trade-tab-controls">
       <label for="opponent-select">Trade partner</label>
       <select id="opponent-select"></select>
     </div>
   </header>
 
   <main>
-    <section class="panels">
-      <div class="panel" id="my-panel">
-        <h2 id="my-team-name">My Roster</h2>
-        <div class="roster-list" id="my-roster-list"></div>
-      </div>
-      <div class="panel" id="their-panel">
-        <h2 id="their-team-name">Their Roster</h2>
-        <div class="roster-list" id="their-roster-list"></div>
-      </div>
-    </section>
+    <div id="trade-tab" class="tab-panel active">
+      <section class="panels">
+        <div class="panel" id="my-panel">
+          <h2 id="my-team-name">My Roster</h2>
+          <div class="roster-list" id="my-roster-list"></div>
+        </div>
+        <div class="panel" id="their-panel">
+          <h2 id="their-team-name">Their Roster</h2>
+          <div class="roster-list" id="their-roster-list"></div>
+        </div>
+      </section>
 
-    <section class="find-bar">
-      <button id="find-trades-btn">Find Trades</button>
-      <span class="hint">Check any players/picks above to seed a deal around them — mine, theirs, or both. Leave everything unchecked to see top packages with no constraints.</span>
-    </section>
+      <section class="find-bar">
+        <button id="find-trades-btn">Find Trades</button>
+        <span class="hint">Check any players/picks above to seed a deal around them — mine, theirs, or both. Leave everything unchecked to see top packages with no constraints.</span>
+      </section>
 
-    <section id="packages"></section>
+      <section id="packages"></section>
+    </div>
+
+    <div id="report-tab" class="tab-panel">
+      <section id="report-content"><p class="loading">Loading report...</p></section>
+    </div>
   </main>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

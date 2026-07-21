@@ -18,23 +18,28 @@ from utils import (
 
 # ---------------------------------------------------------------------------
 # Report sections
+#
+# Each section has a compute_* function returning plain data (reused by
+# app.py's /api/report) and a section_* function that prints it via tabulate.
 # ---------------------------------------------------------------------------
 
-def section_total_value(rosters):
+def compute_total_value(rosters):
     """1. Total roster value ranking (all slots included)."""
-    print("\n=== 1. Total Roster Value Ranking ===")
-    rows = sorted(
-        [(r["team"], sum(p["value"] for p in r["players"])) for r in rosters],
-        key=lambda x: x[1], reverse=True,
+    return sorted(
+        [{"team": r["team"], "total_value": sum(p["value"] for p in r["players"])} for r in rosters],
+        key=lambda x: x["total_value"], reverse=True,
     )
-    table = [[i + 1, team, f"{val:,}"] for i, (team, val) in enumerate(rows)]
+
+
+def section_total_value(rosters):
+    print("\n=== 1. Total Roster Value Ranking ===")
+    rows = compute_total_value(rosters)
+    table = [[i + 1, row["team"], f"{row['total_value']:,}"] for i, row in enumerate(rows)]
     print(tabulate(table, headers=["Rank", "Team", "Total Value"], tablefmt="simple"))
 
 
-def section_position_value(rosters):
+def compute_position_value(rosters):
     """2. Per-team value by position (active players only) vs. league median."""
-    print("\n=== 2. Position Value vs. League Median ===")
-
     team_pos = {}
     for r in rosters:
         pos_val = defaultdict(int)
@@ -49,25 +54,39 @@ def section_position_value(rosters):
         n = len(vals)
         medians[pos] = (vals[n // 2 - 1] + vals[n // 2]) / 2 if n % 2 == 0 else vals[n // 2]
 
+    teams = []
+    for r in sorted(rosters, key=lambda r: sum(team_pos[r["team"]].values()), reverse=True):
+        pos_values = {}
+        for pos in POSITIONS:
+            val = team_pos[r["team"]].get(pos, 0)
+            pos_values[pos] = {"value": val, "diff": val - medians[pos]}
+        teams.append({"team": r["team"], "positions": pos_values})
+
+    return {"medians": medians, "teams": teams}
+
+
+def section_position_value(rosters):
+    print("\n=== 2. Position Value vs. League Median ===")
+    data = compute_position_value(rosters)
+    medians = data["medians"]
+
     print("League medians: " + "  ".join(f"{pos}: {int(medians[pos]):,}" for pos in POSITIONS))
 
     headers = ["Team"] + [f"{pos} (vs med)" for pos in POSITIONS]
-    rows = sorted(rosters, key=lambda r: sum(team_pos[r["team"]].values()), reverse=True)
     table = []
-    for r in rows:
-        row = [r["team"]]
+    for team in data["teams"]:
+        row = [team["team"]]
         for pos in POSITIONS:
-            val = team_pos[r["team"]].get(pos, 0)
-            diff = val - medians[pos]
+            val = team["positions"][pos]["value"]
+            diff = team["positions"][pos]["diff"]
             sign = "+" if diff >= 0 else ""
             row.append(f"{val:,} ({sign}{int(diff):,})")
         table.append(row)
     print(tabulate(table, headers=headers, tablefmt="simple"))
 
 
-def section_starter_vs_bench(rosters, starting_slots):
+def compute_starter_vs_bench(rosters, starting_slots):
     """3. Starter vs. bench value. Starters assigned from active slot only; taxi/IR always bench."""
-    print("\n=== 3. Starter vs. Bench Value ===")
     rows = []
     for r in rosters:
         active = [p for p in r["players"] if p["slot"] == "active"]
@@ -78,32 +97,43 @@ def section_starter_vs_bench(rosters, starting_slots):
         bv = sum(p["value"] for p in bench)
         total = sv + bv
         bench_pct = bv / total * 100 if total else 0
-        rows.append((r["team"], sv, bv, bench_pct))
+        rows.append({"team": r["team"], "starter_value": sv, "bench_value": bv, "bench_pct": bench_pct})
 
-    rows.sort(key=lambda x: x[1], reverse=True)
-    table = [[team, f"{sv:,}", f"{bv:,}", f"{bp:.0f}%"] for team, sv, bv, bp in rows]
+    rows.sort(key=lambda x: x["starter_value"], reverse=True)
+    return rows
+
+
+def section_starter_vs_bench(rosters, starting_slots):
+    print("\n=== 3. Starter vs. Bench Value ===")
+    rows = compute_starter_vs_bench(rosters, starting_slots)
+    table = [[r["team"], f"{r['starter_value']:,}", f"{r['bench_value']:,}", f"{r['bench_pct']:.0f}%"] for r in rows]
     print(tabulate(table, headers=["Team", "Starter Value", "Bench Value", "Bench %"], tablefmt="simple"))
 
 
-def section_age(rosters):
+def compute_age(rosters):
     """4. Value-weighted average age per team (all players with known age and non-zero value)."""
-    print("\n=== 4. Value-Weighted Average Age ===")
     rows = []
     for r in rosters:
         eligible = [p for p in r["players"] if p["age"] is not None and p["value"] > 0]
         if not eligible:
-            rows.append((r["team"], None))
+            rows.append({"team": r["team"], "wtd_age": None})
             continue
         total_weight = sum(p["value"] for p in eligible)
         wtd_age = sum(p["age"] * p["value"] for p in eligible) / total_weight
-        rows.append((r["team"], wtd_age))
+        rows.append({"team": r["team"], "wtd_age": wtd_age})
 
-    rows.sort(key=lambda x: (x[1] is None, x[1] or 0))
-    table = [[team, f"{age:.1f}" if age is not None else "N/A"] for team, age in rows]
+    rows.sort(key=lambda x: (x["wtd_age"] is None, x["wtd_age"] or 0))
+    return rows
+
+
+def section_age(rosters):
+    print("\n=== 4. Value-Weighted Average Age ===")
+    rows = compute_age(rosters)
+    table = [[r["team"], f"{r['wtd_age']:.1f}" if r["wtd_age"] is not None else "N/A"] for r in rows]
     print(tabulate(table, headers=["Team", "Wtd Avg Age"], tablefmt="simple"))
 
 
-def section_pick_capital(conn, rosters, fc_values, draft_rounds, league_season):
+def compute_pick_capital(rosters, fc_values, draft_rounds, traded_picks_rows):
     """
     5. Draft pick capital per team.
 
@@ -111,8 +141,6 @@ def section_pick_capital(conn, rosters, fc_values, draft_rounds, league_season):
     for upcoming seasons, then applying traded_picks to reflect trades.
     Values come from FantasyCalc pick entries averaged by (season, round).
     """
-    print("\n=== 5. Draft Pick Capital ===")
-
     roster_ids = [r["roster_id"] for r in rosters]
     team_by_rid = {r["roster_id"]: r["team"] for r in rosters}
 
@@ -124,7 +152,6 @@ def section_pick_capital(conn, rosters, fc_values, draft_rounds, league_season):
     pick_values = build_pick_value_table(fc_values)
 
     # Initialize: every team owns all their own picks for future seasons
-    # Key: (season, round, original_roster_id) -> current_roster_id
     ownership = {
         (season, rnd, rid): rid
         for season in future_seasons
@@ -132,16 +159,11 @@ def section_pick_capital(conn, rosters, fc_values, draft_rounds, league_season):
         for rid in roster_ids
     }
 
-    # Apply trades: Sleeper original_roster_id = original team, current_roster_id = current holder
-    traded = conn.execute(
-        "SELECT season, round, original_roster_id, current_roster_id FROM traded_picks"
-    ).fetchall()
-    for t in traded:
+    for t in traded_picks_rows:
         key = (t["season"], t["round"], t["original_roster_id"])
         if key in ownership:
             ownership[key] = t["current_roster_id"]
 
-    # Aggregate picks per team
     team_picks = defaultdict(list)
     for (season, rnd, original), current in ownership.items():
         val = pick_values.get((season, rnd), 0)
@@ -152,53 +174,70 @@ def section_pick_capital(conn, rosters, fc_values, draft_rounds, league_season):
         rid = r["roster_id"]
         picks = team_picks.get(rid, [])
         total_val = sum(p[3] for p in picks)
-        # Picks received from other teams (original owner != this team)
-        received = [(s, rn, orig) for s, rn, orig, _ in picks if orig != rid]
-        rows.append((r["team"], total_val, len(picks), received))
+        received = [
+            {"season": s, "round": rn, "from_team": team_by_rid.get(orig, str(orig))}
+            for s, rn, orig, _ in sorted(picks) if orig != rid
+        ]
+        rows.append({"team": r["team"], "pick_value": total_val, "num_picks": len(picks), "received": received})
 
-    rows.sort(key=lambda x: x[1], reverse=True)
+    rows.sort(key=lambda x: x["pick_value"], reverse=True)
+    return {"teams": rows, "picks_unparsed": not pick_values}
+
+
+def section_pick_capital(rosters, fc_values, draft_rounds, traded_picks_rows):
+    print("\n=== 5. Draft Pick Capital ===")
+    data = compute_pick_capital(rosters, fc_values, draft_rounds, traded_picks_rows)
+
     table = []
-    for team, val, count, received in rows:
+    for row in data["teams"]:
         recv_str = ", ".join(
-            f"{s} Rd{rn} ({team_by_rid.get(orig, str(orig))})"
-            for s, rn, orig in sorted(received)
-        ) if received else "-"
-        table.append([team, f"{val:,}", count, recv_str])
+            f"{p['season']} Rd{p['round']} ({p['from_team']})" for p in row["received"]
+        ) if row["received"] else "-"
+        table.append([row["team"], f"{row['pick_value']:,}", row["num_picks"], recv_str])
 
     print(tabulate(table, headers=["Team", "Pick Value", "# Picks", "Received Picks"], tablefmt="simple"))
 
-    if not pick_values:
-        print("\n  Note: FantasyCalc pick entries could not be parsed — pick values shown as 0.")
+    if data["picks_unparsed"]:
+        print("\n  Note: FantasyCalc pick entries could not be parsed -- pick values shown as 0.")
         print("  Pick counts still reflect traded pick ownership.")
 
 
-def section_value_movers(conn):
+def compute_value_movers(trends):
     """6. Top value risers and fallers over the past 7 days — buy low / sell high signals."""
-    print("\n=== 6. Value Movers (7-Day Trend) ===")
-    trends = get_value_trends(conn, days=7)
-
     if not trends:
-        print("  No historical data yet — run ingest.py daily for at least 2 days to see trends.")
-        return
+        return None
 
     skill = {pid: d for pid, d in trends.items() if d["position"] in POSITIONS}
     risers = sorted(skill.items(), key=lambda x: x[1]["delta_pct"], reverse=True)[:10]
     fallers = sorted(skill.items(), key=lambda x: x[1]["delta_pct"])[:10]
 
-    up = [(d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"+{d['delta_pct']:.1f}%") for _, d in risers if d["delta_pct"] > 0]
-    if up:
-        print("\nTop Risers — consider SELLING HIGH:")
+    return {
+        "risers": [d for _, d in risers if d["delta_pct"] > 0],
+        "fallers": [d for _, d in fallers if d["delta_pct"] < 0],
+    }
+
+
+def section_value_movers(trends):
+    print("\n=== 6. Value Movers (7-Day Trend) ===")
+    data = compute_value_movers(trends)
+
+    if data is None:
+        print("  No historical data yet -- run ingest.py daily for at least 2 days to see trends.")
+        return
+
+    if data["risers"]:
+        up = [(d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"+{d['delta_pct']:.1f}%") for d in data["risers"]]
+        print("\nTop Risers -- consider SELLING HIGH:")
         print(tabulate(up, headers=["Player", "Pos", "7d Ago", "Now", "Change"], tablefmt="simple"))
 
-    down = [(d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"{d['delta_pct']:.1f}%") for _, d in fallers if d["delta_pct"] < 0]
-    if down:
-        print("\nTop Fallers — consider BUYING LOW:")
+    if data["fallers"]:
+        down = [(d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"{d['delta_pct']:.1f}%") for d in data["fallers"]]
+        print("\nTop Fallers -- consider BUYING LOW:")
         print(tabulate(down, headers=["Player", "Pos", "7d Ago", "Now", "Change"], tablefmt="simple"))
 
 
-def section_strategy(rosters, starting_slots, pick_assets):
+def compute_strategy(rosters, starting_slots, pick_assets):
     """7. Win-now vs. rebuild assessment for every team."""
-    print("\n=== 7. Strategy Assessment ===")
     tiers = classify_teams(rosters, starting_slots)
     use_record = any(info.get("record_used") for info in tiers.values())
 
@@ -211,15 +250,30 @@ def section_strategy(rosters, starting_slots, pick_assets):
         sv = sum(p["value"] for p in starters)
         tv = sum(p["value"] for p in r["players"])
         pv = sum(p["value"] for p in pick_assets.get(rid, []))
-        record = f"{r['wins']}-{r['losses']}" if use_record else "-"
-        rows.append([r["team"], info["tier"], f"{info['score']:.0%}", record, f"{sv:,}", f"{tv:,}", f"{pv:,}"])
+        record = f"{r['wins']}-{r['losses']}" if use_record else None
+        rows.append({
+            "team": r["team"], "tier": info["tier"], "score": info["score"], "record": record,
+            "starter_value": sv, "total_value": tv, "pick_capital": pv,
+        })
 
-    rows.sort(key=lambda x: x[2], reverse=True)
+    rows.sort(key=lambda x: x["score"], reverse=True)
+    return {"use_record": use_record, "teams": rows}
+
+
+def section_strategy(rosters, starting_slots, pick_assets):
+    print("\n=== 7. Strategy Assessment ===")
+    data = compute_strategy(rosters, starting_slots, pick_assets)
+
     headers = ["Team", "Tier", "Score", "Record", "Starter Val", "Total Val", "Pick Capital"]
-    print(tabulate(rows, headers=headers, tablefmt="simple"))
-    basis = "40% starter rank + 20% total rank + 40% win rate" if use_record else "60% starter rank + 40% total rank (offseason — no record)"
+    table = [
+        [row["team"], row["tier"], f"{row['score']:.0%}", row["record"] or "-",
+         f"{row['starter_value']:,}", f"{row['total_value']:,}", f"{row['pick_capital']:,}"]
+        for row in data["teams"]
+    ]
+    print(tabulate(table, headers=headers, tablefmt="simple"))
+    basis = "40% starter rank + 20% total rank + 40% win rate" if data["use_record"] else "60% starter rank + 40% total rank (offseason -- no record)"
     print(f"\nTier basis: {basis}")
-    print("Contending (≥60%) = compete now  |  Middle = flexible  |  Rebuilding (≤35%) = accumulate picks")
+    print("Contending (>=60%) = compete now  |  Middle = flexible  |  Rebuilding (<=35%) = accumulate picks")
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +286,17 @@ def main():
     settings = load_settings(conn)
     fc_values = get_latest_fc_values(conn)
     rosters = get_rosters(conn, fc_values)
+    trends = get_value_trends(conn, days=7)
+    traded_picks_rows = conn.execute(
+        "SELECT season, round, original_roster_id, current_roster_id FROM traded_picks"
+    ).fetchall()
 
     fmt_str = f"{'Superflex' if settings['superflex'] else '1QB'}, {settings['ppr']} PPR"
     if settings["te_premium"]:
         fmt_str += f", TE+{settings['te_premium']}"
     slots = settings["starting_slots"]
 
-    print("=== Dynasty GM — Roster Strength Report ===")
+    print("=== Dynasty GM -- Roster Strength Report ===")
     print(f"Format: {fmt_str}")
     print(f"Starting slots ({len(slots)}): {', '.join(slots)}")
 
@@ -249,8 +307,8 @@ def main():
     section_position_value(rosters)
     section_starter_vs_bench(rosters, slots)
     section_age(rosters)
-    section_pick_capital(conn, rosters, fc_values, settings["draft_rounds"], settings["season"])
-    section_value_movers(conn)
+    section_pick_capital(rosters, fc_values, settings["draft_rounds"], traded_picks_rows)
+    section_value_movers(trends)
     section_strategy(rosters, slots, pick_assets)
 
     conn.close()

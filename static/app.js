@@ -5,8 +5,187 @@ let MY_TEAM_NAME = "";
 let OPPONENT_ROSTER_ID = null;
 let MY_ASSETS = [];    // full roster, refreshed once
 let THEIR_ASSETS = []; // full roster, refreshed on opponent change
+let REPORT_LOADED = false;
 
 init();
+initTabs();
+
+function initTabs() {
+  const buttons = document.querySelectorAll(".tab-btn");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      buttons.forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(btn.dataset.tab).classList.add("active");
+      document.getElementById("trade-tab-controls").style.display = btn.dataset.tab === "trade-tab" ? "flex" : "none";
+      if (btn.dataset.tab === "report-tab" && !REPORT_LOADED) {
+        REPORT_LOADED = true;
+        loadReport();
+      }
+    });
+  });
+}
+
+async function loadReport() {
+  const container = document.getElementById("report-content");
+  let data;
+  try {
+    data = await fetchJSON("/api/report");
+  } catch (e) {
+    container.innerHTML = `<p class="error">${e.message}</p>`;
+    return;
+  }
+  container.innerHTML = "";
+  container.appendChild(reportTotalValue(data.total_value));
+  container.appendChild(reportPositionValue(data.position_value));
+  container.appendChild(reportStarterVsBench(data.starter_vs_bench));
+  container.appendChild(reportAge(data.age));
+  container.appendChild(reportPickCapital(data.pick_capital));
+  container.appendChild(reportValueMovers(data.value_movers));
+  container.appendChild(reportStrategy(data.strategy));
+}
+
+function reportSection(title, ...children) {
+  const sec = document.createElement("div");
+  sec.className = "report-section";
+  const h3 = document.createElement("h3");
+  h3.textContent = title;
+  sec.appendChild(h3);
+  children.forEach(c => sec.appendChild(c));
+  return sec;
+}
+
+function buildTable(headers, rows) {
+  const table = document.createElement("table");
+  table.className = "report-table";
+  const thead = document.createElement("tr");
+  headers.forEach(h => {
+    const th = document.createElement("th");
+    th.textContent = h;
+    thead.appendChild(th);
+  });
+  table.appendChild(thead);
+  rows.forEach(cells => {
+    const tr = document.createElement("tr");
+    cells.forEach(c => {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+  });
+  return table;
+}
+
+function reportTotalValue(rows) {
+  const table = buildTable(
+    ["Rank", "Team", "Total Value"],
+    rows.map((r, i) => [i + 1, r.team, r.total_value.toLocaleString()])
+  );
+  return reportSection("1. Total Roster Value Ranking", table);
+}
+
+function reportPositionValue(data) {
+  const medians = document.createElement("p");
+  medians.className = "hint";
+  medians.textContent = "League medians: " + POSITION_ORDER.slice(0, 4)
+    .map(pos => `${pos}: ${Math.round(data.medians[pos]).toLocaleString()}`).join("  ");
+  const table = buildTable(
+    ["Team", "QB (vs med)", "RB (vs med)", "WR (vs med)", "TE (vs med)"],
+    data.teams.map(t => [
+      t.team,
+      ...POSITION_ORDER.slice(0, 4).map(pos => {
+        const p = t.positions[pos];
+        const sign = p.diff >= 0 ? "+" : "";
+        return `${p.value.toLocaleString()} (${sign}${Math.round(p.diff).toLocaleString()})`;
+      }),
+    ])
+  );
+  return reportSection("2. Position Value vs. League Median", medians, table);
+}
+
+function reportStarterVsBench(rows) {
+  const table = buildTable(
+    ["Team", "Starter Value", "Bench Value", "Bench %"],
+    rows.map(r => [r.team, r.starter_value.toLocaleString(), r.bench_value.toLocaleString(), `${r.bench_pct.toFixed(0)}%`])
+  );
+  return reportSection("3. Starter vs. Bench Value", table);
+}
+
+function reportAge(rows) {
+  const table = buildTable(
+    ["Team", "Wtd Avg Age"],
+    rows.map(r => [r.team, r.wtd_age !== null ? r.wtd_age.toFixed(1) : "N/A"])
+  );
+  return reportSection("4. Value-Weighted Average Age", table);
+}
+
+function reportPickCapital(data) {
+  const table = buildTable(
+    ["Team", "Pick Value", "# Picks", "Received Picks"],
+    data.teams.map(r => [
+      r.team,
+      r.pick_value.toLocaleString(),
+      r.num_picks,
+      r.received.length ? r.received.map(p => `${p.season} Rd${p.round} (${p.from_team})`).join(", ") : "-",
+    ])
+  );
+  const children = [table];
+  if (data.picks_unparsed) {
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent = "FantasyCalc pick entries could not be parsed -- pick values shown as 0. Pick counts still reflect traded pick ownership.";
+    children.push(note);
+  }
+  return reportSection("5. Draft Pick Capital", ...children);
+}
+
+function reportValueMovers(data) {
+  if (!data) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No historical data yet -- run ingest.py daily for at least 2 days to see trends.";
+    return reportSection("6. Value Movers (7-Day Trend)", p);
+  }
+  const children = [];
+  if (data.risers.length) {
+    const h4 = document.createElement("h4");
+    h4.textContent = "Top Risers -- consider SELLING HIGH";
+    children.push(h4, buildTable(
+      ["Player", "Pos", "7d Ago", "Now", "Change"],
+      data.risers.map(d => [d.name, d.position, d.prev.toLocaleString(), d.current.toLocaleString(), `+${d.delta_pct.toFixed(1)}%`])
+    ));
+  }
+  if (data.fallers.length) {
+    const h4 = document.createElement("h4");
+    h4.textContent = "Top Fallers -- consider BUYING LOW";
+    children.push(h4, buildTable(
+      ["Player", "Pos", "7d Ago", "Now", "Change"],
+      data.fallers.map(d => [d.name, d.position, d.prev.toLocaleString(), d.current.toLocaleString(), `${d.delta_pct.toFixed(1)}%`])
+    ));
+  }
+  return reportSection("6. Value Movers (7-Day Trend)", ...children);
+}
+
+function reportStrategy(data) {
+  const table = buildTable(
+    ["Team", "Tier", "Score", "Record", "Starter Val", "Total Val", "Pick Capital"],
+    data.teams.map(r => [
+      r.team, r.tier, `${(r.score * 100).toFixed(0)}%`, r.record || "-",
+      r.starter_value.toLocaleString(), r.total_value.toLocaleString(), r.pick_capital.toLocaleString(),
+    ])
+  );
+  const basis = document.createElement("p");
+  basis.className = "hint";
+  basis.textContent = data.use_record
+    ? "Tier basis: 40% starter rank + 20% total rank + 40% win rate"
+    : "Tier basis: 60% starter rank + 40% total rank (offseason -- no record)";
+  const legend = document.createElement("p");
+  legend.className = "hint";
+  legend.textContent = "Contending (>=60%) = compete now  |  Middle = flexible  |  Rebuilding (<=35%) = accumulate picks";
+  return reportSection("7. Strategy Assessment", table, basis, legend);
+}
 
 async function init() {
   const teamsData = await fetchJSON("/api/teams");

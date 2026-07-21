@@ -45,6 +45,15 @@ from trade_finder import (
     generate_packages_seeded,
     rank_trade_partners,
 )
+from report import (
+    compute_age,
+    compute_pick_capital,
+    compute_position_value,
+    compute_starter_vs_bench,
+    compute_strategy,
+    compute_total_value,
+    compute_value_movers,
+)
 
 app = Flask(__name__)
 
@@ -72,6 +81,9 @@ def load_state():
     STATE.trends = get_value_trends(conn, days=7)
     STATE.my_roster = find_my_roster(STATE.rosters, MY_TEAM)
     STATE.roster_by_id = {r["roster_id"]: r for r in STATE.rosters}
+    STATE.traded_picks_rows = conn.execute(
+        "SELECT season, round, original_roster_id, current_roster_id FROM traded_picks"
+    ).fetchall()
     conn.close()
 
 
@@ -227,6 +239,23 @@ def api_roster(roster_id):
         "team": roster["team"],
         "tier": STATE.tiers[roster_id]["tier"],
         "assets": [asset_json(a) for a in assets],
+    })
+
+
+@app.route("/api/report")
+def api_report():
+    slots = STATE.settings["starting_slots"]
+    strategy = compute_strategy(STATE.rosters, slots, STATE.pick_assets)
+    return jsonify({
+        "total_value": compute_total_value(STATE.rosters),
+        "position_value": compute_position_value(STATE.rosters),
+        "starter_vs_bench": compute_starter_vs_bench(STATE.rosters, slots),
+        "age": compute_age(STATE.rosters),
+        "pick_capital": compute_pick_capital(
+            STATE.rosters, STATE.fc_values, STATE.settings["draft_rounds"], STATE.traded_picks_rows
+        ),
+        "value_movers": compute_value_movers(STATE.trends),
+        "strategy": strategy,
     })
 
 

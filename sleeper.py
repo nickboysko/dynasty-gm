@@ -3,7 +3,7 @@ import os
 import time
 
 from curl_cffi import requests
-from curl_cffi.requests.exceptions import RequestsError as CurlError
+from curl_cffi.requests.exceptions import RequestException as CurlError
 
 BASE_URL = "https://api.sleeper.app/v1"
 PLAYERS_CACHE = os.path.join(os.path.dirname(__file__), "players_cache.json")

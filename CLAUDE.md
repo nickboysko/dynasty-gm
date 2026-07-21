@@ -163,7 +163,7 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 | `trade_finder.py` | Positional partners, rebuild targets, sell-side market; dynasty + trend annotations |
 | `target_finder.py` | Input any player name, get fair packages from your roster to acquire them |
 | `analyze_managers.py` | Pick capital positions, trade value history, buy/sell signals |
-| `app.py` | Interactive web trade builder: pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback |
+| `app.py` | Web UI, two tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback) and **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions) |
 
 ## Untouchables
 
@@ -173,9 +173,8 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 
 ### Tier 1 — High impact, build next
 
-1. **Port `report.py` into `app.py`** — surplus/deficit-by-position, age curve, pick capital, and value-mover views should live in the web UI alongside the trade builder, not just the CLI. Goal: `app.py` becomes the single place this tool is used.
-2. **AI trade-advice endpoint** — given a specific package (from the trade builder or a real inbound offer), call the Claude API for a plain-English verdict: fair/unfair, dynasty risk, whether to accept. Natural fit as a button on each package card in `app.py`.
-3. **Free agent / waiver wire targets** — query FC values for players not on any roster; surface high-value free agents before opponents notice, with pickup suggestions. Also belongs in `app.py`, not just a new CLI script.
+1. **AI trade-advice endpoint** — given a specific package (from the trade builder or a real inbound offer), call the Claude API for a plain-English verdict: fair/unfair, dynasty risk, whether to accept. Natural fit as a button on each package card in `app.py`.
+2. **Free agent / waiver wire targets** — query FC values for players not on any roster; surface high-value free agents before opponents notice, with pickup suggestions. Belongs in `app.py`, not a new CLI script.
 
 ### Tier 2 — Strategic edge
 

@@ -134,7 +134,9 @@ PLAYER_DISCOUNT_REBUILD = 0.10 # rebuilder players discounted 10% (willing selle
 TOLERANCE = 0.22               # +/-22% value window for "fair" trade
 ```
 
-Package generation tries (1v1, 2v1, 1v2, 2v2) combos, filters by secondary asset floor and trivial pick-for-pick swaps, sorts by positional fit then value closeness.
+Package generation tries (1v1, 2v1, 1v2, 2v2) combos, filters by secondary asset floor and trivial pick-for-pick swaps, then sorts by: **(1) strategy alignment for your team's tier, (2) positional fit, (3) value closeness.**
+
+**Strategy alignment** (`generate_packages`/`generate_packages_seeded`'s `my_tier` param, via `_strategy_alignment_penalty`): Contending teams rank send>recv ("give up depth for one great player") packages first; Rebuilding teams rank recv>send ("sell one good player for multiple/younger assets") first; Middle has no directional preference. This is the dominant sort key -- it applies before positional fit or value closeness, in `trade_finder.py`, `target_finder.py`, and `app.py` alike.
 
 **Dynasty warnings** fire on every package when prime-seasons gap >= 3 between send and receive sides. RBs cliff at 27, WRs at 30 — the same market value can hide a large future gap. These are informational; market values are still used for matching.
 
@@ -163,7 +165,7 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 | `trade_finder.py` | Positional partners, rebuild targets, sell-side market; dynasty + trend annotations |
 | `target_finder.py` | Input any player name, get fair packages from your roster to acquire them |
 | `analyze_managers.py` | Pick capital positions, trade value history, buy/sell signals |
-| `app.py` | Web UI, three tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback; "Copy for AI" exports a package as plain text -- both teams' tier/record plus your full roster -- for pasting into any AI chat), **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions), and **Free Agents** (every unrostered player with FC value > 0, search + position filter, "vs Your Roster" upgrade comparison against your weakest player at that position, "Suggested Pickups" callout) |
+| `app.py` | Web UI, three tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback; "Find Trades (All Teams)" searches your top 5 ranked partners at once using only your-side seeds; "Copy for AI" exports a package as plain text -- both teams' tier/record plus your full roster -- for pasting into any AI chat), **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions), and **Free Agents** (every unrostered player with FC value > 0, search + position filter, "vs Your Roster" upgrade comparison against your weakest player at that position, "Suggested Pickups" callout) |
 
 ## Untouchables
 

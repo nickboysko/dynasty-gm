@@ -2,6 +2,8 @@ const POSITION_ORDER = ["QB", "RB", "WR", "TE", "PICK"];
 
 let MY_ROSTER_ID = null;
 let MY_TEAM_NAME = "";
+let MY_TEAM_INFO = null;      // {tier, wins, losses, record_used}
+let OPPONENT_TEAM_INFO = null; // {team, tier, wins, losses, record_used}
 let OPPONENT_ROSTER_ID = null;
 let MY_ASSETS = [];    // full roster, refreshed once
 let THEIR_ASSETS = []; // full roster, refreshed on opponent change
@@ -56,6 +58,15 @@ async function loadFreeAgents() {
   renderFaTable();
 }
 
+function compareCell(a) {
+  const c = a.roster_comparison;
+  if (!c) return "-";
+  const sign = c.value_diff >= 0 ? "+" : "";
+  return c.worth_drop
+    ? `Upgrade over ${c.player_name} (${sign}${c.value_diff.toLocaleString()})`
+    : `Below ${c.player_name} (${sign}${c.value_diff.toLocaleString()})`;
+}
+
 function renderFaSuggested() {
   const container = document.getElementById("fa-suggested");
   const topValue = FA_DATA.slice(0, 5);
@@ -63,6 +74,10 @@ function renderFaSuggested() {
     .filter(a => a.trend_delta_pct !== null && a.trend_delta_pct >= 15)
     .sort((a, b) => b.trend_delta_pct - a.trend_delta_pct)
     .slice(0, 5);
+  const upgrades = FA_DATA
+    .filter(a => a.roster_comparison && a.roster_comparison.worth_drop)
+    .sort((a, b) => b.roster_comparison.value_diff - a.roster_comparison.value_diff)
+    .slice(0, 8);
 
   container.innerHTML = "";
   const sec = document.createElement("div");
@@ -71,13 +86,22 @@ function renderFaSuggested() {
   h3.textContent = "Suggested Pickups";
   sec.appendChild(h3);
 
+  if (upgrades.length) {
+    const h4 = document.createElement("h4");
+    h4.textContent = "Worth dropping someone for -- beats your weakest player at that position";
+    sec.appendChild(h4);
+    sec.appendChild(buildTable(
+      ["Player", "Pos", "Team", "Age", "Value", "vs Your Roster"],
+      upgrades.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), compareCell(a)])
+    ));
+  }
   if (topValue.length) {
     const h4 = document.createElement("h4");
     h4.textContent = "Highest value available";
     sec.appendChild(h4);
     sec.appendChild(buildTable(
-      ["Player", "Pos", "Team", "Age", "Value"],
-      topValue.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString()])
+      ["Player", "Pos", "Team", "Age", "Value", "vs Your Roster"],
+      topValue.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), compareCell(a)])
     ));
   }
   if (trending.length) {
@@ -85,8 +109,8 @@ function renderFaSuggested() {
     h4.textContent = "Trending up 15%+ this week -- grab before your league notices";
     sec.appendChild(h4);
     sec.appendChild(buildTable(
-      ["Player", "Pos", "Team", "Age", "Value", "7d Change"],
-      trending.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), `+${a.trend_delta_pct.toFixed(1)}%`])
+      ["Player", "Pos", "Team", "Age", "Value", "7d Change", "vs Your Roster"],
+      trending.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), `+${a.trend_delta_pct.toFixed(1)}%`, compareCell(a)])
     ));
   }
   container.appendChild(sec);
@@ -102,10 +126,11 @@ function renderFaTable() {
   const rows = filtered.map(a => [
     a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(),
     a.trend_delta_pct !== null ? `${a.trend_delta_pct >= 0 ? "+" : ""}${a.trend_delta_pct.toFixed(1)}%` : "-",
+    compareCell(a),
   ]);
   const container = document.getElementById("fa-table-container");
   container.innerHTML = "";
-  container.appendChild(buildTable(["Player", "Pos", "Team", "Age", "Value", "7d Change"], rows));
+  container.appendChild(buildTable(["Player", "Pos", "Team", "Age", "Value", "7d Change", "vs Your Roster"], rows));
 }
 
 async function loadReport() {
@@ -272,6 +297,7 @@ async function init() {
   const teamsData = await fetchJSON("/api/teams");
   MY_ROSTER_ID = teamsData.my_roster_id;
   MY_TEAM_NAME = teamsData.my_team;
+  MY_TEAM_INFO = teamsData.my_tier;
   document.getElementById("my-team-name").textContent = `My Roster (${MY_TEAM_NAME})`;
 
   const select = document.getElementById("opponent-select");
@@ -301,6 +327,7 @@ async function loadOpponent(rosterId) {
   OPPONENT_ROSTER_ID = rosterId;
   const data = await fetchJSON(`/api/roster/${rosterId}`);
   THEIR_ASSETS = data.assets;
+  OPPONENT_TEAM_INFO = { team: data.team, tier: data.tier, wins: data.wins, losses: data.losses, record_used: data.record_used };
   document.getElementById("their-team-name").textContent = `Their Roster (${data.team})`;
   renderRosterList("their-roster-list", THEIR_ASSETS);
   document.getElementById("packages").innerHTML = "";
@@ -578,9 +605,20 @@ function fmtSigned(n) {
   return (rounded >= 0 ? "+" : "") + rounded.toLocaleString();
 }
 
+function teamStatusLine(info) {
+  if (!info) return "unknown";
+  const record = info.record_used ? `, ${info.wins}-${info.losses}` : "";
+  return `${info.tier}${record}`;
+}
+
 function buildTradeSummaryText(view) {
   const lines = [];
-  lines.push("I'm evaluating a dynasty fantasy football trade (Superflex, 1.0 PPR, TE premium). Here's the deal:");
+  lines.push("I'm evaluating a dynasty fantasy football trade (Superflex, 1.0 PPR, TE premium). Here's the full picture:");
+  lines.push("");
+  lines.push(`My team: ${view.send.team} [${teamStatusLine(MY_TEAM_INFO)}]`);
+  lines.push(`Their team: ${view.recv.team} [${teamStatusLine(OPPONENT_TEAM_INFO)}]`);
+  lines.push("");
+  lines.push("The trade:");
   lines.push("");
   lines.push(`${view.send.team} sends:`);
   for (const a of view.send.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})`);
@@ -602,7 +640,17 @@ function buildTradeSummaryText(view) {
   if (notes.length) lines.push(`Notes: ${notes.join("; ")}`);
 
   lines.push("");
-  lines.push("What do you think -- is this fair, and does it make sense for my team long-term?");
+  lines.push("For full context, here's my entire current roster:");
+  const byPos = groupByPosition(MY_ASSETS);
+  for (const pos of POSITION_ORDER) {
+    const group = byPos[pos];
+    if (!group || !group.length) continue;
+    const label = pos === "PICK" ? "Picks" : pos;
+    lines.push(`${label}: ` + group.map(a => `${a.full_name} (${a.value.toLocaleString()})`).join(", "));
+  }
+
+  lines.push("");
+  lines.push("What do you think -- is this fair, and does it make sense for my team long-term given my roster and situation?");
   return lines.join("\n");
 }
 

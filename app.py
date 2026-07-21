@@ -228,9 +228,17 @@ def api_teams():
             "record_used": info["record_used"],
             "fit_score": score,
         })
+    my_rid = STATE.my_roster["roster_id"]
+    my_info = STATE.tiers[my_rid]
     return jsonify({
-        "my_roster_id": STATE.my_roster["roster_id"],
+        "my_roster_id": my_rid,
         "my_team": STATE.my_roster["team"],
+        "my_tier": {
+            "tier": my_info["tier"],
+            "wins": my_info["wins"],
+            "losses": my_info["losses"],
+            "record_used": my_info["record_used"],
+        },
         "teams": teams,
     })
 
@@ -239,10 +247,14 @@ def api_teams():
 def api_roster(roster_id):
     roster = get_roster(roster_id)
     assets = get_sendable_assets(roster_id)
+    info = STATE.tiers[roster_id]
     return jsonify({
         "roster_id": roster_id,
         "team": roster["team"],
-        "tier": STATE.tiers[roster_id]["tier"],
+        "tier": info["tier"],
+        "wins": info["wins"],
+        "losses": info["losses"],
+        "record_used": info["record_used"],
         "assets": [asset_json(a) for a in assets],
     })
 
@@ -264,14 +276,41 @@ def api_report():
     })
 
 
+def _my_weakest_by_position():
+    """Lowest-value rostered player at each position -- the natural drop candidate
+    if a free agent turns out to be worth more."""
+    weakest = {}
+    for p in STATE.my_roster["players"]:
+        if p["position"] not in POSITIONS:
+            continue
+        if p["position"] not in weakest or p["value"] < weakest[p["position"]]["value"]:
+            weakest[p["position"]] = p
+    return weakest
+
+
 @app.route("/api/free_agents")
 def api_free_agents():
     agents = [a for a in STATE.free_agents if a["position"] in POSITIONS and a["value"] > 0]
     agents.sort(key=lambda a: a["value"], reverse=True)
+    weakest_by_pos = _my_weakest_by_position()
+
     result = []
     for a in agents:
         trend = STATE.trends.get(a["player_id"])
-        result.append({**a, "trend_delta_pct": trend["delta_pct"] if trend else None})
+        weakest = weakest_by_pos.get(a["position"])
+        comparison = None
+        if weakest:
+            comparison = {
+                "player_name": weakest["full_name"],
+                "player_value": weakest["value"],
+                "value_diff": a["value"] - weakest["value"],
+                "worth_drop": a["value"] > weakest["value"],
+            }
+        result.append({
+            **a,
+            "trend_delta_pct": trend["delta_pct"] if trend else None,
+            "roster_comparison": comparison,
+        })
     return jsonify({"free_agents": result})
 
 

@@ -163,7 +163,7 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 | `trade_finder.py` | Positional partners, rebuild targets, sell-side market; dynasty + trend annotations |
 | `target_finder.py` | Input any player name, get fair packages from your roster to acquire them |
 | `analyze_managers.py` | Pick capital positions, trade value history, buy/sell signals |
-| `app.py` | Web UI, two tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback) and **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions) |
+| `app.py` | Web UI, three tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback, "Copy for AI" to export a package as plain text for pasting into any AI chat), **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions), and **Free Agents** (every unrostered player with FC value > 0, search + position filter, "Suggested Pickups" callout) |
 
 ## Untouchables
 
@@ -173,16 +173,15 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 
 ### Tier 1 — High impact, build next
 
-1. **AI trade-advice endpoint** — given a specific package (from the trade builder or a real inbound offer), call the Claude API for a plain-English verdict: fair/unfair, dynasty risk, whether to accept. Natural fit as a button on each package card in `app.py`.
-2. **Free agent / waiver wire targets** — query FC values for players not on any roster; surface high-value free agents before opponents notice, with pickup suggestions. Belongs in `app.py`, not a new CLI script.
+1. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
+2. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
 
 ### Tier 2 — Strategic edge
 
-4. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
-5. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
-6. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc. (`app.py`'s trade builder is 2-team only today)
+3. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc. (`app.py`'s trade builder is 2-team only today)
+4. **AI trade-advice endpoint** — deferred: user is unsure how long they'll keep paying for Claude Pro / API usage, so `app.py`'s "Copy for AI" button (paste a generated package summary into any AI chat manually, no API key needed) covers this need for now. Revisit only if the user wants it automated later.
 
 ### Tier 3 — Quality of life
 
-7. **Visual polish on `app.py`** — current styling is functional, not pretty; revisit once the feature set above settles
-8. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids
+5. **Visual polish on `app.py`** — current styling is functional, not pretty; revisit once the feature set above settles
+6. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids

@@ -175,15 +175,17 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 
 ### Tier 1 — High impact, build next
 
-1. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
-2. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
+1. **Injury/status awareness** — Sleeper's `/players/nfl` dump includes injury status, but the `players` table doesn't store it and nothing in `report.py`/`app.py` surfaces it. Small effort (one more ingested field + a badge in Free Agents/trade views), but real downside without it: recommending a trade target or waiver pickup with no idea they're questionable/out/IR becomes an active risk once the season starts. Do this first — it's cheap and closes a real gap.
+2. **Weekly start/sit + matchup awareness** — everything built so far (trade builder, report, free agents) is roster-*construction*. Once games start, the recurring decision that actually wins weeks is "who do I start," which depends on matchups/byes — the tool currently has zero visibility into this. Bigger lift than #1 (needs a schedule/matchup data source), but it's a genuinely new capability, not a refinement of what exists. **Subsumes** the older "playoff schedule analyzer" idea (favorable matchups in weeks 15-17) — build this once, not twice.
+3. **Recent league activity feed** — `ingest.py` already pulls every trade/waiver transaction into the `transactions` table weekly; nothing surfaces it. A simple "what did the league do this week" view is cheap (data's already there) and gives real intel on rivals tipping their hand (e.g. a rebuilder loading up on rookie RBs confirms their direction before you negotiate).
 
 ### Tier 2 — Strategic edge
 
-3. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc. (`app.py`'s trade builder is 2-team only today)
-4. **AI trade-advice endpoint** — deferred: user is unsure how long they'll keep paying for Claude Pro / API usage, so `app.py`'s "Copy for AI" button (paste a generated package summary into any AI chat manually, no API key needed) covers this need for now. Revisit only if the user wants it automated later.
+4. **Draft class scouting overlay** — annotate pick capital with NFL draft prospect rankings. Low urgency right now: the tradeable picks are all future-season (2027+), and there's no real scouting data on a class whose college season hasn't happened yet. Revisit next spring closer to the actual draft.
+5. **Multi-team trade finder** — find true 3-way deals where A has what B needs, etc. (`app.py`'s single-trade builder, and even "Find Trades All Teams," only ever construct 2-team deals). Lower priority — 3-way trades are rare in practice even when supported.
+6. **AI trade-advice endpoint** — deferred: user is unsure how long they'll keep paying for Claude Pro / API usage, so `app.py`'s "Copy for AI" button (paste a generated package summary into any AI chat manually, no API key needed) covers this need for now. Revisit only if the user wants it automated later — don't suggest this unprompted.
 
 ### Tier 3 — Quality of life
 
-5. **Visual polish on `app.py`** — current styling is functional, not pretty; revisit once the feature set above settles
-6. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids
+7. **Visual polish on `app.py`** — current styling is functional, not pretty; revisit once the feature set above settles
+8. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids (unconfirmed whether this league does — check league settings before starting)

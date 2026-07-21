@@ -321,6 +321,7 @@ async function init() {
   }
 
   document.getElementById("find-trades-btn").addEventListener("click", findTrades);
+  document.getElementById("find-trades-all-btn").addEventListener("click", findTradesAllTeams);
 }
 
 async function loadOpponent(rosterId) {
@@ -418,10 +419,60 @@ async function findTrades() {
   data.packages.forEach((pkg, i) => container.appendChild(buildPackageCard(pkg, i)));
 }
 
-function buildPackageCard(pkg, index) {
+const ROSTER_ASSET_CACHE = {};
+
+async function getRosterAssets(rosterId) {
+  if (rosterId === MY_ROSTER_ID) return MY_ASSETS;
+  if (!ROSTER_ASSET_CACHE[rosterId]) {
+    ROSTER_ASSET_CACHE[rosterId] = (await fetchJSON(`/api/roster/${rosterId}`)).assets;
+  }
+  return ROSTER_ASSET_CACHE[rosterId];
+}
+
+async function findTradesAllTeams() {
+  const seedSendIds = getCheckedIds("my-roster-list");
+  const container = document.getElementById("packages");
+  container.innerHTML = "<p class='loading'>Searching across your top trade partners...</p>";
+
+  let data;
+  try {
+    data = await postJSON("/api/find_trades_all", { seed_send_ids: seedSendIds });
+  } catch (e) {
+    container.innerHTML = `<p class="error">${e.message}</p>`;
+    return;
+  }
+
+  if (!data.results.length) {
+    container.innerHTML = "<p>No fair packages found for these seeds with any partner. Try different players or fewer constraints.</p>";
+    return;
+  }
+
+  await Promise.all(data.results.map(r => getRosterAssets(r.opponent_roster_id)));
+
+  container.innerHTML = "";
+  for (const result of data.results) {
+    const group = document.createElement("div");
+    group.className = "partner-group";
+    const record = result.record_used ? ` ${result.wins}-${result.losses}` : "";
+    group.innerHTML = `<h3>${result.team} [${result.tier}${record}] <span class="hint">fit score ${Math.round(result.fit_score).toLocaleString()}</span></h3>`;
+    if (result.pick_note) {
+      const note = document.createElement("p");
+      note.className = "pick-note";
+      note.textContent = result.pick_note;
+      group.appendChild(note);
+    }
+    const recvAssets = ROSTER_ASSET_CACHE[result.opponent_roster_id];
+    result.packages.forEach((pkg, i) => group.appendChild(buildPackageCard(pkg, i, result.opponent_roster_id, recvAssets)));
+    container.appendChild(group);
+  }
+}
+
+function buildPackageCard(pkg, index, recvRosterId = OPPONENT_ROSTER_ID, recvAssetsPool = THEIR_ASSETS) {
   const card = document.createElement("div");
   card.className = "package-card";
   card.dataset.index = index;
+  card._recvRosterId = recvRosterId;
+  card._recvAssets = recvAssetsPool;
 
   const sendIds = new Set(pkg.send.assets.map(a => a.player_id));
   const recvIds = new Set(pkg.recv.assets.map(a => a.player_id));
@@ -454,7 +505,7 @@ function buildPackageCard(pkg, index) {
   `;
 
   populateAddSelect(card.querySelector('[data-side="send"] .add-select'), MY_ASSETS, sendIds);
-  populateAddSelect(card.querySelector('[data-side="recv"] .add-select'), THEIR_ASSETS, recvIds);
+  populateAddSelect(card.querySelector('[data-side="recv"] .add-select'), recvAssetsPool, recvIds);
 
   card.querySelector('[data-side="send"] .add-select').addEventListener("change", (e) => {
     if (e.target.value) { sendIds.add(e.target.value); refreshCard(card, sendIds, recvIds); }
@@ -490,7 +541,7 @@ async function refreshCard(card, sendIds, recvIds) {
     view = await postJSON("/api/evaluate", {
       send_roster_id: MY_ROSTER_ID,
       send_ids: Array.from(sendIds),
-      recv_roster_id: OPPONENT_ROSTER_ID,
+      recv_roster_id: card._recvRosterId,
       recv_ids: Array.from(recvIds),
     });
   } catch (e) {
@@ -565,7 +616,7 @@ function renderSide(card, side, sideView, ids, otherIds) {
     chip.appendChild(remove);
     chips.appendChild(chip);
   }
-  const allAssets = side === "send" ? MY_ASSETS : THEIR_ASSETS;
+  const allAssets = side === "send" ? MY_ASSETS : card._recvAssets;
   populateAddSelect(col.querySelector(".add-select"), allAssets, ids);
 }
 

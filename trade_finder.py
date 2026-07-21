@@ -171,7 +171,25 @@ def _has_quality_depth(assets):
     return all(v >= values[0] * SECONDARY_ASSET_FLOOR for v in values[1:])
 
 
-def generate_packages(send_assets, recv_assets, my_surplus):
+def _strategy_alignment_penalty(n_s, n_r, my_tier):
+    """
+    Lower is better; used as the top sort key so packages matching how a team
+    in this tier should actually be trading rank above ones that don't.
+
+    Contending teams should consolidate: give up depth for one great player
+    (send > recv). Rebuilding teams should do the opposite: sell one good
+    player for a return of multiple/younger assets (recv > send). Middle
+    teams have no directional preference. An equal-size trade is a mild
+    fit either way; the "wrong direction" for your tier is the worst fit.
+    """
+    if my_tier == "Contending":
+        return 0 if n_s > n_r else (1 if n_s == n_r else 2)
+    if my_tier == "Rebuilding":
+        return 0 if n_r > n_s else (1 if n_r == n_s else 2)
+    return 0
+
+
+def generate_packages(send_assets, recv_assets, my_surplus, my_tier=None):
     """
     Generates fair trade packages (1-for-1, 2-for-1, 1-for-2, 2-for-2).
 
@@ -180,7 +198,8 @@ def generate_packages(send_assets, recv_assets, my_surplus):
     - Trivial pick-for-pick swaps of equal value
     - Consolidation premium applied in value balance check
 
-    Sorted by positional fit (receive deficit positions, send surplus positions),
+    Sorted first by strategy alignment for my_tier (see _strategy_alignment_penalty),
+    then by positional fit (receive deficit positions, send surplus positions),
     then by closeness to even value. Capped at MAX_PACKAGES.
     """
     results = []
@@ -206,13 +225,14 @@ def generate_packages(send_assets, recv_assets, my_surplus):
                         sum(-my_surplus.get(a["position"], 0) for a in r_combo if a["position"] in POSITIONS)
                         + sum(my_surplus.get(a["position"], 0) for a in s_combo if a["position"] in POSITIONS)
                     )
-                    results.append((-fit, imbalance, list(s_combo), list(r_combo)))
+                    penalty = _strategy_alignment_penalty(s_size, r_size, my_tier)
+                    results.append((penalty, -fit, imbalance, list(s_combo), list(r_combo)))
 
-    results.sort(key=lambda x: (x[0], x[1]))
+    results.sort(key=lambda x: (x[0], x[1], x[2]))
 
     seen = set()
     unique = []
-    for _, _, s, r in results:
+    for _, _, _, s, r in results:
         key = (
             frozenset(a["player_id"] for a in s),
             frozenset(a["player_id"] for a in r),
@@ -226,7 +246,7 @@ def generate_packages(send_assets, recv_assets, my_surplus):
     return unique
 
 
-def generate_packages_seeded(seed_send, seed_recv, extra_send_pool, extra_recv_pool, my_surplus, max_total_per_side=2):
+def generate_packages_seeded(seed_send, seed_recv, extra_send_pool, extra_recv_pool, my_surplus, my_tier=None, max_total_per_side=2):
     """
     Like generate_packages, but seed_send/seed_recv are guaranteed to appear in
     every returned package. Fills in 0..N extra assets per side (from the pools,
@@ -236,7 +256,7 @@ def generate_packages_seeded(seed_send, seed_recv, extra_send_pool, extra_recv_p
     generate_packages for identical behavior to the unseeded search.
     """
     if not seed_send and not seed_recv:
-        return generate_packages(extra_send_pool, extra_recv_pool, my_surplus)
+        return generate_packages(extra_send_pool, extra_recv_pool, my_surplus, my_tier=my_tier)
 
     seed_send_ids = {a["player_id"] for a in seed_send}
     seed_recv_ids = {a["player_id"] for a in seed_recv}
@@ -271,13 +291,14 @@ def generate_packages_seeded(seed_send, seed_recv, extra_send_pool, extra_recv_p
                             sum(-my_surplus.get(a["position"], 0) for a in r_combo if a["position"] in POSITIONS)
                             + sum(my_surplus.get(a["position"], 0) for a in s_combo if a["position"] in POSITIONS)
                         )
-                        results.append((-fit, imbalance, s_combo, r_combo))
+                        penalty = _strategy_alignment_penalty(len(s_combo), len(r_combo), my_tier)
+                        results.append((penalty, -fit, imbalance, s_combo, r_combo))
 
-    results.sort(key=lambda x: (x[0], x[1]))
+    results.sort(key=lambda x: (x[0], x[1], x[2]))
 
     seen = set()
     unique = []
-    for _, _, s, r in results:
+    for _, _, _, s, r in results:
         key = (
             frozenset(a["player_id"] for a in s),
             frozenset(a["player_id"] for a in r),
@@ -434,7 +455,7 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
         their_picks = [p for p in pick_assets.get(prid, []) if p["value"] >= MIN_ASSET_VALUE]
         their_assets = sorted(their_players + their_picks, key=lambda x: x["value"], reverse=True)
 
-        packages = generate_packages(my_assets, their_assets, my_s)
+        packages = generate_packages(my_assets, their_assets, my_s, my_tier=my_tier["tier"])
 
         if not packages:
             print("  No fair packages found within value tolerance.")
@@ -473,13 +494,13 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
 
         # Try picks-only send first — that's the point of targeting rebuilders
         pick_send = sorted(adj_picks, key=lambda x: x["value"], reverse=True)
-        packages = generate_packages(pick_send, recv_assets, my_s) if pick_send else []
+        packages = generate_packages(pick_send, recv_assets, my_s, my_tier=my_tier["tier"]) if pick_send else []
         pick_only = bool(packages)
 
         # Fall back to picks + surplus players if no pick-only deals exist
         if not packages:
             mixed_send = sorted(my_players + adj_picks, key=lambda x: x["value"], reverse=True)
-            packages = generate_packages(mixed_send, recv_assets, my_s)
+            packages = generate_packages(mixed_send, recv_assets, my_s, my_tier=my_tier["tier"])
 
         if not packages:
             print("  No fair packages found.")
@@ -539,7 +560,7 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
         )
 
         if not needy:
-            print(f"\n  {player['full_name']} ({pos}, {player['value']:,}){trend_str} — no teams have a {pos} deficit")
+            print(f"\n  {player['full_name']} ({pos}, {player['value']:,}){trend_str} -- no teams have a {pos} deficit")
             continue
 
         print(f"\n--- {player['full_name']} ({pos}, {player['value']:,}){trend_str} ---")
@@ -553,7 +574,7 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
             their_picks = [p for p in pick_assets.get(prid, []) if p["value"] >= MIN_ASSET_VALUE]
             their_assets = sorted(their_players + their_picks, key=lambda x: x["value"], reverse=True)
 
-            packages = generate_packages([player], their_assets, my_s)
+            packages = generate_packages([player], their_assets, my_s, my_tier=my_tier["tier"])
             if not packages:
                 continue
 

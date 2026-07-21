@@ -31,6 +31,7 @@ from utils import (
 )
 from trade_finder import (
     CONSOLIDATION_PREMIUM,
+    MAX_PARTNERS,
     MIN_ASSET_VALUE,
     MY_TEAM,
     PICK_PREMIUM_REBUILD,
@@ -314,19 +315,10 @@ def api_free_agents():
     return jsonify({"free_agents": result})
 
 
-@app.route("/api/find_trades", methods=["POST"])
-def api_find_trades():
-    data = request.get_json(force=True) or {}
-    if data.get("opponent_roster_id") is None:
-        abort(400, description="opponent_roster_id is required")
-    opponent_rid = int(data["opponent_roster_id"])
-    my_rid = STATE.my_roster["roster_id"]
-    if opponent_rid == my_rid:
-        abort(400, description="opponent_roster_id cannot be your own roster")
+def _find_packages_for_opponent(my_rid, seed_send, seed_recv, opponent_rid):
+    """Core seeded-package search against one specific opponent. seed_send/seed_recv
+    are already-resolved asset lists. Returns {"packages", "opponent_tier", "pick_note"}."""
     opponent_roster = get_roster(opponent_rid)
-
-    seed_send = resolve_ids(my_rid, data.get("seed_send_ids") or [])
-    seed_recv = resolve_ids(opponent_rid, data.get("seed_recv_ids") or [])
     seed_send_ids = {a["player_id"] for a in seed_send}
     seed_recv_ids = {a["player_id"] for a in seed_recv}
 
@@ -372,7 +364,8 @@ def api_find_trades():
         their_pool = their_players + their_picks
         seed_recv_search = seed_recv
 
-    packages = generate_packages_seeded(seed_send, seed_recv_search, my_pool, their_pool, STATE.surplus[my_rid])
+    my_tier = STATE.tiers[my_rid]["tier"]
+    packages = generate_packages_seeded(seed_send, seed_recv_search, my_pool, their_pool, STATE.surplus[my_rid], my_tier=my_tier)
 
     def restore(a):
         factor = restore_map.get(a["player_id"])
@@ -382,7 +375,54 @@ def api_find_trades():
         build_trade_view(my_rid, [restore(a) for a in s], opponent_rid, [restore(a) for a in r])
         for s, r in packages
     ]
-    return jsonify({"packages": result_packages, "opponent_tier": opponent_tier, "pick_note": pick_note})
+    return {"packages": result_packages, "opponent_tier": opponent_tier, "pick_note": pick_note}
+
+
+@app.route("/api/find_trades", methods=["POST"])
+def api_find_trades():
+    data = request.get_json(force=True) or {}
+    if data.get("opponent_roster_id") is None:
+        abort(400, description="opponent_roster_id is required")
+    opponent_rid = int(data["opponent_roster_id"])
+    my_rid = STATE.my_roster["roster_id"]
+    if opponent_rid == my_rid:
+        abort(400, description="opponent_roster_id cannot be your own roster")
+    get_roster(opponent_rid)
+
+    seed_send = resolve_ids(my_rid, data.get("seed_send_ids") or [])
+    seed_recv = resolve_ids(opponent_rid, data.get("seed_recv_ids") or [])
+
+    return jsonify(_find_packages_for_opponent(my_rid, seed_send, seed_recv, opponent_rid))
+
+
+@app.route("/api/find_trades_all", methods=["POST"])
+def api_find_trades_all():
+    """Search across the top-ranked partners at once, using only my-side seeds --
+    for when you want to see what multiple teams would offer for the same players,
+    rather than committing to one opponent first."""
+    data = request.get_json(force=True) or {}
+    my_rid = STATE.my_roster["roster_id"]
+    seed_send = resolve_ids(my_rid, data.get("seed_send_ids") or [])
+
+    partners = rank_trade_partners(STATE.my_roster, STATE.rosters, STATE.surplus)
+    results = []
+    for score, partner in partners[:MAX_PARTNERS]:
+        opponent_rid = partner["roster_id"]
+        info = STATE.tiers[opponent_rid]
+        pkg_data = _find_packages_for_opponent(my_rid, seed_send, [], opponent_rid)
+        if pkg_data["packages"]:
+            results.append({
+                "opponent_roster_id": opponent_rid,
+                "team": partner["team"],
+                "tier": pkg_data["opponent_tier"],
+                "wins": info["wins"],
+                "losses": info["losses"],
+                "record_used": info["record_used"],
+                "fit_score": score,
+                "pick_note": pkg_data["pick_note"],
+                "packages": pkg_data["packages"],
+            })
+    return jsonify({"results": results})
 
 
 @app.route("/api/evaluate", methods=["POST"])

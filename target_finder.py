@@ -67,7 +67,7 @@ def find_target_player(name_query, rosters):
 
     # Still ambiguous
     options = "\n  ".join(
-        f"{p['full_name']} ({p['position']}, {p['value']:,}) — {r['team']}"
+        f"{p['full_name']} ({p['position']}, {p['value']:,}) -- {r['team']}"
         for p, r in matches[:10]
     )
     raise SystemExit(f"Multiple matches for '{name_query}':\n  {options}\n\nBe more specific.")
@@ -134,7 +134,7 @@ def main():
         if d and abs(d["delta_pct"]) >= 3:
             direction = "up" if d["delta_pct"] > 0 else "down"
             context = "owner may want to sell high" if d["delta_pct"] > 0 else "buy low opportunity"
-            trend_str = f"  [{direction} {abs(d['delta_pct']):.1f}% this week — {context}]"
+            trend_str = f"  [{direction} {abs(d['delta_pct']):.1f}% this week -- {context}]"
 
     record_str = ""
     if target_tier.get("record_used"):
@@ -162,7 +162,7 @@ def main():
     # -----------------------------------------------------------------------
     # target is the single asset we want to receive; generate_packages finds
     # what combinations from send_pool match its value (1-for-1 and 2-for-1)
-    packages = generate_packages(send_pool, [target], my_s)
+    packages = generate_packages(send_pool, [target], my_s, my_tier=tiers[my_rid]["tier"])
 
     # Restore pick face values for display if we inflated them
     if target_tier["tier"] == "Rebuilding":
@@ -194,7 +194,7 @@ def main():
         print(f"\nNo fair packages found.")
         print(
             f"{target['full_name']} is valued at {target['value']:,}. "
-            f"Your tradeable assets may not match — consider including picks."
+            f"Your tradeable assets may not match -- consider including picks."
         )
         # Show your top assets so the user can reason about it
         print("\nYour top tradeable assets:")

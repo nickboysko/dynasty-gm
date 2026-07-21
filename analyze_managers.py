@@ -217,7 +217,7 @@ def main():
             tablefmt="simple",
         ))
         print()
-        print("  Key: Overpaying managers give away more than they receive — they are your best trade targets.")
+        print("  Key: Overpaying managers give away more than they receive -- they are your best trade targets.")
         print("  Trade them the side of a deal they historically overpay for.")
 
     # -----------------------------------------------------------------------
@@ -231,18 +231,18 @@ def main():
     else:
         sell, buy, team_by_pid = result
 
-        print("\n=== 4. Sell High — Your Players Trending Up ===")
+        print("\n=== 4. Sell High -- Your Players Trending Up ===")
         if sell:
             rows = [
                 [d["name"], d["position"], f"{d['prev']:,}", f"{d['current']:,}", f"+{d['delta_pct']:.1f}%"]
                 for _, d in sell
             ]
             print(tabulate(rows, headers=["Player", "Pos", "7d Ago", "Now", "Change"], tablefmt="simple"))
-            print("  These players have rising market value — ideal time to sell or ask for a premium.")
+            print("  These players have rising market value -- ideal time to sell or ask for a premium.")
         else:
             print("  No significant risers on your roster this week.")
 
-        print("\n=== 5. Buy Low — Other Rosters Trending Down ===")
+        print("\n=== 5. Buy Low -- Other Rosters Trending Down ===")
         if buy:
             rows = [
                 [d["name"], d["position"], team_by_pid.get(pid, "?"),
@@ -250,7 +250,7 @@ def main():
                 for pid, d in buy
             ]
             print(tabulate(rows, headers=["Player", "Pos", "Owner", "7d Ago", "Now", "Change"], tablefmt="simple"))
-            print("  These players have falling market value — offer a slight discount to pry them away.")
+            print("  These players have falling market value -- offer a slight discount to pry them away.")
         else:
             print("  No significant fallers on other rosters this week.")
 

@@ -165,7 +165,21 @@ main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
   cursor: pointer;
 }
 
-.find-bar .hint { color: var(--muted); font-size: 0.85rem; }
+.find-bar .hint { color: var(--muted); font-size: 0.85rem; flex-basis: 100%; }
+
+.secondary-btn {
+  padding: 0.6rem 1.2rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.partner-group { margin-bottom: 1.5rem; }
+.partner-group h3 { display: flex; align-items: baseline; gap: 0.6rem; }
+.partner-group h3 .hint { font-weight: 400; font-size: 0.8rem; }
 
 .pick-note {
   color: var(--warn-text);

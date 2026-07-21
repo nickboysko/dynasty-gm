@@ -163,7 +163,7 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 | `trade_finder.py` | Positional partners, rebuild targets, sell-side market; dynasty + trend annotations |
 | `target_finder.py` | Input any player name, get fair packages from your roster to acquire them |
 | `analyze_managers.py` | Pick capital positions, trade value history, buy/sell signals |
-| `app.py` | Web UI, three tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback, "Copy for AI" to export a package as plain text for pasting into any AI chat), **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions), and **Free Agents** (every unrostered player with FC value > 0, search + position filter, "Suggested Pickups" callout) |
+| `app.py` | Web UI, three tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback; "Copy for AI" exports a package as plain text -- both teams' tier/record plus your full roster -- for pasting into any AI chat), **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions), and **Free Agents** (every unrostered player with FC value > 0, search + position filter, "vs Your Roster" upgrade comparison against your weakest player at that position, "Suggested Pickups" callout) |
 
 ## Untouchables
 

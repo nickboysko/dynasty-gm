@@ -173,15 +173,17 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 
 ### Tier 1 — High impact, build next
 
-1. **Free agent / waiver wire targets** — query FC values for players not on any roster; surface high-value free agents before opponents notice
-2. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
+1. **Port `report.py` into `app.py`** — surplus/deficit-by-position, age curve, pick capital, and value-mover views should live in the web UI alongside the trade builder, not just the CLI. Goal: `app.py` becomes the single place this tool is used.
+2. **AI trade-advice endpoint** — given a specific package (from the trade builder or a real inbound offer), call the Claude API for a plain-English verdict: fair/unfair, dynasty risk, whether to accept. Natural fit as a button on each package card in `app.py`.
+3. **Free agent / waiver wire targets** — query FC values for players not on any roster; surface high-value free agents before opponents notice, with pickup suggestions. Also belongs in `app.py`, not just a new CLI script.
 
 ### Tier 2 — Strategic edge
 
-3. **LLM narrative layer** — call Claude API with roster + surplus data; output a plain-English paragraph: "your biggest lever is X, target Y, avoid trading Z"
-4. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
-5. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc. (`app.py`'s trade builder is 2-team only today)
+4. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
+5. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
+6. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc. (`app.py`'s trade builder is 2-team only today)
 
 ### Tier 3 — Quality of life
 
-6. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids
+7. **Visual polish on `app.py`** — current styling is functional, not pretty; revisit once the feature set above settles
+8. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids

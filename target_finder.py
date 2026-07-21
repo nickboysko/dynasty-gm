@@ -21,6 +21,7 @@ from utils import (
     build_pick_value_table,
     classify_teams,
     compute_pick_assets,
+    filter_untouchables,
     get_latest_fc_values,
     get_rosters,
     get_value_trends,
@@ -108,10 +109,10 @@ def main():
     # -----------------------------------------------------------------------
     # Build send pool
     # -----------------------------------------------------------------------
-    my_players = [
+    my_players = filter_untouchables([
         p for p in my_roster["players"]
         if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE
-    ]
+    ])
     my_picks_raw = [p for p in pick_assets.get(my_rid, []) if p["value"] >= MIN_ASSET_VALUE]
 
     # Inflate picks when the target owner is rebuilding — they prize future capital

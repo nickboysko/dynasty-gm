@@ -19,6 +19,7 @@ from utils import (
     build_pick_value_table,
     classify_teams,
     compute_pick_assets,
+    filter_untouchables,
     get_latest_fc_values,
     get_rosters,
     get_value_trends,
@@ -225,6 +226,71 @@ def generate_packages(send_assets, recv_assets, my_surplus):
     return unique
 
 
+def generate_packages_seeded(seed_send, seed_recv, extra_send_pool, extra_recv_pool, my_surplus, max_total_per_side=2):
+    """
+    Like generate_packages, but seed_send/seed_recv are guaranteed to appear in
+    every returned package. Fills in 0..N extra assets per side (from the pools,
+    excluding anything already seeded) up to max_total_per_side assets on that side.
+    If a seed list already meets/exceeds max_total_per_side, that side is used
+    as-is with no extras searched. With no seeds at all, delegates to
+    generate_packages for identical behavior to the unseeded search.
+    """
+    if not seed_send and not seed_recv:
+        return generate_packages(extra_send_pool, extra_recv_pool, my_surplus)
+
+    seed_send_ids = {a["player_id"] for a in seed_send}
+    seed_recv_ids = {a["player_id"] for a in seed_recv}
+    send_pool = [a for a in extra_send_pool if a["player_id"] not in seed_send_ids]
+    recv_pool = [a for a in extra_recv_pool if a["player_id"] not in seed_recv_ids]
+
+    max_extra_send = max(0, max_total_per_side - len(seed_send))
+    max_extra_recv = max(0, max_total_per_side - len(seed_recv))
+
+    results = []
+    for n_extra_s in range(max_extra_send + 1):
+        for extra_s in combinations(send_pool, n_extra_s):
+            s_combo = list(seed_send) + list(extra_s)
+            if not s_combo or not _has_quality_depth(s_combo):
+                continue
+            sv = sum(a["value"] for a in s_combo)
+            if sv == 0:
+                continue
+            for n_extra_r in range(max_extra_recv + 1):
+                for extra_r in combinations(recv_pool, n_extra_r):
+                    r_combo = list(seed_recv) + list(extra_r)
+                    if not r_combo or not _has_quality_depth(r_combo):
+                        continue
+                    rv = sum(a["value"] for a in r_combo)
+                    if rv == 0:
+                        continue
+                    if _all_picks(s_combo) and _all_picks(r_combo) and sv == rv:
+                        continue
+                    if _is_fair(s_combo, r_combo):
+                        imbalance = abs(sv - rv) / max(sv, rv)
+                        fit = (
+                            sum(-my_surplus.get(a["position"], 0) for a in r_combo if a["position"] in POSITIONS)
+                            + sum(my_surplus.get(a["position"], 0) for a in s_combo if a["position"] in POSITIONS)
+                        )
+                        results.append((-fit, imbalance, s_combo, r_combo))
+
+    results.sort(key=lambda x: (x[0], x[1]))
+
+    seen = set()
+    unique = []
+    for _, _, s, r in results:
+        key = (
+            frozenset(a["player_id"] for a in s),
+            frozenset(a["player_id"] for a in r),
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append((s, r))
+        if len(unique) >= MAX_PACKAGES:
+            break
+
+    return unique
+
+
 # ---------------------------------------------------------------------------
 # Rebuild-context asset adjustment
 # ---------------------------------------------------------------------------
@@ -300,7 +366,7 @@ def _trend_signals(assets, trends):
     for a in assets:
         d = trends.get(a["player_id"])
         if d and abs(d["delta_pct"]) >= 3 and a["position"] in POSITIONS:
-            arrow = "↑" if d["delta_pct"] > 0 else "↓"
+            arrow = "+" if d["delta_pct"] > 0 else "-"
             signals.append(f"{a['full_name'].split()[1] if ' ' in a['full_name'] else a['full_name']} {arrow}{abs(d['delta_pct']):.1f}%")
     return signals
 
@@ -341,7 +407,9 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
     print("\nYour positional surplus vs. league median (starters only):")
     print(tabulate(pos_rows, headers=["Pos", "Surplus"], tablefmt="simple"))
 
-    my_players = [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+    my_players = filter_untouchables(
+        [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+    )
     my_picks = [p for p in pick_assets.get(my_rid, []) if p["value"] >= MIN_ASSET_VALUE]
     my_assets = sorted(my_players + my_picks, key=lambda x: x["value"], reverse=True)
 
@@ -447,7 +515,9 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
     print(f"{'=' * 60}")
 
     my_sell_candidates = sorted(
-        [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE],
+        filter_untouchables(
+            [p for p in my_roster["players"] if p["position"] in POSITIONS and p["value"] >= MIN_ASSET_VALUE]
+        ),
         key=lambda x: x["value"], reverse=True,
     )[:8]
 
@@ -458,7 +528,7 @@ def print_report(my_roster, partners, surplus, pick_assets, tiers, rosters, tren
         if trends:
             d = trends.get(player["player_id"])
             if d and abs(d["delta_pct"]) >= 3:
-                arrow = "↑" if d["delta_pct"] > 0 else "↓"
+                arrow = "+" if d["delta_pct"] > 0 else "-"
                 trend_str = f"  {arrow}{abs(d['delta_pct']):.1f}% (7d)"
 
         needy = sorted(

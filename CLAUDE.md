@@ -30,6 +30,11 @@ python target_finder.py gibbs
 
 # Manager trade profile analysis (pick positions, buy/sell signals)
 python analyze_managers.py
+
+# Interactive web trade builder — seed players/picks from either roster, get
+# generated packages, edit them live (add/remove assets, see value update)
+python app.py
+# then open http://127.0.0.1:5000 (local only)
 ```
 
 ## Architecture
@@ -38,9 +43,12 @@ python analyze_managers.py
 dynasty-gm/
 ├── ingest.py           # Fetches Sleeper + FantasyCalc data, writes to SQLite
 ├── report.py           # 7-section roster strength report
-├── trade_finder.py     # Trade partners, rebuild targets, sell-side market
+├── trade_finder.py     # Trade partners, rebuild targets, sell-side market, generate_packages(_seeded) engine
 ├── target_finder.py    # "I want Player X — what should I offer?"
 ├── analyze_managers.py # Pick positions, trade value history, buy/sell signals
+├── app.py              # Flask web trade builder — seed/generate/edit packages live (127.0.0.1:5000)
+├── templates/          # index.html for app.py
+├── static/             # app.js + style.css for app.py
 ├── db.py               # Schema + migrations, DB connection helper
 ├── sleeper.py          # Sleeper API client (curl_cffi, Cloudflare bypass)
 ├── fantasycalc.py      # FantasyCalc API client
@@ -48,7 +56,7 @@ dynasty-gm/
 ├── ingest_daily.bat    # Batch file for Windows Task Scheduler (runs 7am daily)
 ├── dynasty.db          # SQLite database (gitignored)
 ├── players_cache.json  # /players/nfl cache (gitignored, refresh max once/day)
-├── logs/               # Ingest log output from Task Scheduler
+├── logs/               # Ingest log output from Task Scheduler (gitignored)
 └── requirements.txt
 ```
 
@@ -155,22 +163,25 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 | `trade_finder.py` | Positional partners, rebuild targets, sell-side market; dynasty + trend annotations |
 | `target_finder.py` | Input any player name, get fair packages from your roster to acquire them |
 | `analyze_managers.py` | Pick capital positions, trade value history, buy/sell signals |
+| `app.py` | Interactive web trade builder: pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback |
+
+## Untouchables
+
+`utils.UNTOUCHABLES` (a set of lowercased `full_name`s) marks players who should never appear in an *automatically generated* sendable pool — `filter_untouchables()` excludes them from `trade_finder.py`, `target_finder.py`, and `app.py`'s auto-fill pools. This does not block manually including one of them in a trade — in `app.py`, checking an untouchable as a seed or adding it via a package card's "+ Add asset" still evaluates normally; the guard is only on the algorithm's own suggestions.
 
 ## Future Work (Prioritized)
 
 ### Tier 1 — High impact, build next
 
 1. **Free agent / waiver wire targets** — query FC values for players not on any roster; surface high-value free agents before opponents notice
-2. **Trade offer evaluator** — input both sides of any inbound offer and get: fair/unfair, dynasty prime gap, who wins long-term
-3. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
+2. **Playoff schedule analyzer** — identify which players have favorable matchups during your league's specific playoff weeks (usually weeks 15-17)
 
 ### Tier 2 — Strategic edge
 
-4. **LLM narrative layer** — call Claude API with roster + surplus data; output a plain-English paragraph: "your biggest lever is X, target Y, avoid trading Z"
-5. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
-6. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc.
+3. **LLM narrative layer** — call Claude API with roster + surplus data; output a plain-English paragraph: "your biggest lever is X, target Y, avoid trading Z"
+4. **Draft class scouting overlay** — annotate your pick capital with 2026 NFL draft prospect rankings; e.g., "dannyleep7 Rd1 likely top-3 pick"
+5. **Multi-team trade finder** — find 3-way deals where A has what you need, B has what A needs, etc. (`app.py`'s trade builder is 2-team only today)
 
 ### Tier 3 — Quality of life
 
-7. **Web UI** — local Flask app so you can use this in a browser instead of terminal
-8. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids
+6. **FAAB tracker** — if league uses auction waivers, track budget and recommend bids

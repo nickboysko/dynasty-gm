@@ -7,9 +7,20 @@ import db
 
 POSITIONS = ["QB", "RB", "WR", "TE"]
 
+# Players you will not include in any generated trade package (full_name, case-insensitive).
+# They still count toward your roster value/tier -- just excluded from what gets offered.
+UNTOUCHABLES = {
+    "jaxon smith-njigba",
+}
+
 # Age at which each position hits its production cliff (modern era averages from dynasty research).
 # RBs cliff at 27-28, WRs at 30-32, TEs similar to WR, QBs latest.
 PRIME_CLIFF_AGE = {"QB": 33, "RB": 27, "WR": 30, "TE": 29}
+
+
+def filter_untouchables(players):
+    """Drops players in UNTOUCHABLES from a list of sendable assets."""
+    return [p for p in players if p.get("full_name", "").lower() not in UNTOUCHABLES]
 
 
 def prime_years_remaining(player):

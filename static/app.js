@@ -6,6 +6,9 @@ let OPPONENT_ROSTER_ID = null;
 let MY_ASSETS = [];    // full roster, refreshed once
 let THEIR_ASSETS = []; // full roster, refreshed on opponent change
 let REPORT_LOADED = false;
+let FA_LOADED = false;
+let FA_DATA = [];
+let FA_POS_FILTER = "ALL";
 
 init();
 initTabs();
@@ -23,8 +26,86 @@ function initTabs() {
         REPORT_LOADED = true;
         loadReport();
       }
+      if (btn.dataset.tab === "fa-tab" && !FA_LOADED) {
+        FA_LOADED = true;
+        loadFreeAgents();
+      }
     });
   });
+}
+
+async function loadFreeAgents() {
+  let data;
+  try {
+    data = await fetchJSON("/api/free_agents");
+  } catch (e) {
+    document.getElementById("fa-table-container").innerHTML = `<p class="error">${e.message}</p>`;
+    return;
+  }
+  FA_DATA = data.free_agents;
+  renderFaSuggested();
+  document.getElementById("fa-search").addEventListener("input", renderFaTable);
+  document.querySelectorAll(".pos-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".pos-filter-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      FA_POS_FILTER = btn.dataset.pos;
+      renderFaTable();
+    });
+  });
+  renderFaTable();
+}
+
+function renderFaSuggested() {
+  const container = document.getElementById("fa-suggested");
+  const topValue = FA_DATA.slice(0, 5);
+  const trending = FA_DATA
+    .filter(a => a.trend_delta_pct !== null && a.trend_delta_pct >= 15)
+    .sort((a, b) => b.trend_delta_pct - a.trend_delta_pct)
+    .slice(0, 5);
+
+  container.innerHTML = "";
+  const sec = document.createElement("div");
+  sec.className = "report-section";
+  const h3 = document.createElement("h3");
+  h3.textContent = "Suggested Pickups";
+  sec.appendChild(h3);
+
+  if (topValue.length) {
+    const h4 = document.createElement("h4");
+    h4.textContent = "Highest value available";
+    sec.appendChild(h4);
+    sec.appendChild(buildTable(
+      ["Player", "Pos", "Team", "Age", "Value"],
+      topValue.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString()])
+    ));
+  }
+  if (trending.length) {
+    const h4 = document.createElement("h4");
+    h4.textContent = "Trending up 15%+ this week -- grab before your league notices";
+    sec.appendChild(h4);
+    sec.appendChild(buildTable(
+      ["Player", "Pos", "Team", "Age", "Value", "7d Change"],
+      trending.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), `+${a.trend_delta_pct.toFixed(1)}%`])
+    ));
+  }
+  container.appendChild(sec);
+}
+
+function renderFaTable() {
+  const search = document.getElementById("fa-search").value.trim().toLowerCase();
+  const filtered = FA_DATA.filter(a => {
+    if (FA_POS_FILTER !== "ALL" && a.position !== FA_POS_FILTER) return false;
+    if (search && !a.full_name.toLowerCase().includes(search)) return false;
+    return true;
+  });
+  const rows = filtered.map(a => [
+    a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(),
+    a.trend_delta_pct !== null ? `${a.trend_delta_pct >= 0 ? "+" : ""}${a.trend_delta_pct.toFixed(1)}%` : "-",
+  ]);
+  const container = document.getElementById("fa-table-container");
+  container.innerHTML = "";
+  container.appendChild(buildTable(["Player", "Pos", "Team", "Age", "Value", "7d Change"], rows));
 }
 
 async function loadReport() {
@@ -321,7 +402,10 @@ function buildPackageCard(pkg, index) {
   card.innerHTML = `
     <div class="card-header">
       <h3>Package ${index + 1}</h3>
-      <span class="fair-badge"></span>
+      <div class="card-header-actions">
+        <span class="fair-badge"></span>
+        <button class="copy-ai-btn" type="button">Copy for AI</button>
+      </div>
     </div>
     <div class="card-cols">
       <div class="card-col" data-side="send">
@@ -351,6 +435,8 @@ function buildPackageCard(pkg, index) {
   card.querySelector('[data-side="recv"] .add-select').addEventListener("change", (e) => {
     if (e.target.value) { recvIds.add(e.target.value); refreshCard(card, sendIds, recvIds); }
   });
+
+  card.querySelector(".copy-ai-btn").addEventListener("click", (e) => copyForAi(card, e.target));
 
   renderCardBody(card, pkg, sendIds, recvIds);
   return card;
@@ -388,6 +474,7 @@ async function refreshCard(card, sendIds, recvIds) {
 }
 
 function renderCardBody(card, view, sendIds, recvIds) {
+  card._lastView = view;
   const badge = card.querySelector(".fair-badge");
   badge.textContent = view.fair ? "Fair" : "Not Fair";
   badge.className = "fair-badge " + (view.fair ? "fair" : "unfair");
@@ -489,6 +576,54 @@ function surplusTable(title, beforeAfter) {
 function fmtSigned(n) {
   const rounded = Math.round(n);
   return (rounded >= 0 ? "+" : "") + rounded.toLocaleString();
+}
+
+function buildTradeSummaryText(view) {
+  const lines = [];
+  lines.push("I'm evaluating a dynasty fantasy football trade (Superflex, 1.0 PPR, TE premium). Here's the deal:");
+  lines.push("");
+  lines.push(`${view.send.team} sends:`);
+  for (const a of view.send.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})`);
+  lines.push(`Total: ${view.send.total_value.toLocaleString()}`);
+  lines.push("");
+  lines.push(`${view.recv.team} sends:`);
+  for (const a of view.recv.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})`);
+  lines.push(`Total: ${view.recv.total_value.toLocaleString()}`);
+  lines.push("");
+  lines.push(`My tool's verdict: ${view.fair ? "Fair" : "Not fair"} (value ratio ${view.value_ratio ? view.value_ratio.toFixed(2) : "n/a"}, tolerance +/-${Math.round(view.tolerance * 100)}%)`);
+  if (view.dynasty_warning) lines.push(`Dynasty note: ${view.dynasty_warning}`);
+
+  const trendBits = [];
+  if (view.trend_signals.send.length) trendBits.push("Sell high: " + view.trend_signals.send.join(", "));
+  if (view.trend_signals.recv.length) trendBits.push("Buy low: " + view.trend_signals.recv.join(", "));
+  if (trendBits.length) lines.push(`This week's value trends: ${trendBits.join(" | ")}`);
+
+  const notes = [...(view.annotations?.my_side || []), ...(view.annotations?.their_side || [])];
+  if (notes.length) lines.push(`Notes: ${notes.join("; ")}`);
+
+  lines.push("");
+  lines.push("What do you think -- is this fair, and does it make sense for my team long-term?");
+  return lines.join("\n");
+}
+
+async function copyForAi(card, button) {
+  const view = card._lastView;
+  if (!view) return;
+  const text = buildTradeSummaryText(view);
+  const originalLabel = button.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "Copied!";
+  } catch (e) {
+    // Clipboard API unavailable (e.g. insecure context) -- fall back to a selectable textarea
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.className = "copy-fallback";
+    card.appendChild(ta);
+    ta.select();
+    button.textContent = "Select & copy below";
+  }
+  setTimeout(() => { button.textContent = originalLabel; }, 2000);
 }
 
 async function fetchJSON(url) {

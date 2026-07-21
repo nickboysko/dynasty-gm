@@ -23,6 +23,7 @@ from utils import (
     classify_teams,
     compute_pick_assets,
     filter_untouchables,
+    get_free_agents,
     get_latest_fc_values,
     get_rosters,
     get_value_trends,
@@ -84,6 +85,7 @@ def load_state():
     STATE.traded_picks_rows = conn.execute(
         "SELECT season, round, original_roster_id, current_roster_id FROM traded_picks"
     ).fetchall()
+    STATE.free_agents = get_free_agents(conn, STATE.fc_values)
     conn.close()
 
 
@@ -157,6 +159,9 @@ def build_trade_view(send_rid, send_assets, recv_rid, recv_assets):
             "total_value": rv,
         },
         "fair": _is_fair(send_assets, recv_assets) if send_assets and recv_assets else False,
+        "value_ratio": (sv / rv) if rv else None,
+        "tolerance": TOLERANCE,
+        "consolidation_premium": CONSOLIDATION_PREMIUM,
         "dynasty_warning": _dynasty_warning(send_assets, recv_assets),
         "trend_signals": {
             "send": _trend_signals(send_assets, STATE.trends),
@@ -259,6 +264,17 @@ def api_report():
     })
 
 
+@app.route("/api/free_agents")
+def api_free_agents():
+    agents = [a for a in STATE.free_agents if a["position"] in POSITIONS and a["value"] > 0]
+    agents.sort(key=lambda a: a["value"], reverse=True)
+    result = []
+    for a in agents:
+        trend = STATE.trends.get(a["player_id"])
+        result.append({**a, "trend_delta_pct": trend["delta_pct"] if trend else None})
+    return jsonify({"free_agents": result})
+
+
 @app.route("/api/find_trades", methods=["POST"])
 def api_find_trades():
     data = request.get_json(force=True) or {}
@@ -344,11 +360,6 @@ def api_evaluate():
     recv_assets = resolve_ids(recv_rid, data.get("recv_ids") or [])
 
     view = build_trade_view(send_rid, send_assets, recv_rid, recv_assets)
-    sv = view["send"]["total_value"]
-    rv = view["recv"]["total_value"]
-    view["value_ratio"] = (sv / rv) if rv else None
-    view["tolerance"] = TOLERANCE
-    view["consolidation_premium"] = CONSOLIDATION_PREMIUM
     view["surplus_impact"] = compute_surplus_impact(send_rid, send_assets, recv_rid, recv_assets)
     return jsonify(view)
 

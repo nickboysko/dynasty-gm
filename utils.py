@@ -113,6 +113,24 @@ def get_rosters(conn, fc_values):
     return result
 
 
+def get_free_agents(conn, fc_values):
+    """Returns all NFL players not on any roster (any slot), enriched with FC value."""
+    rostered_ids = {r["player_id"] for r in conn.execute("SELECT DISTINCT player_id FROM roster_players").fetchall()}
+    all_players = conn.execute("SELECT player_id, full_name, position, team, age FROM players").fetchall()
+    return [
+        {
+            "player_id": p["player_id"],
+            "full_name": p["full_name"] or p["player_id"],
+            "position": p["position"],
+            "team": p["team"],
+            "age": p["age"],
+            "value": fc_values.get(p["player_id"], {}).get("value", 0),
+        }
+        for p in all_players
+        if p["player_id"] not in rostered_ids
+    ]
+
+
 def assign_starters(players, starting_slots):
     """
     Greedy starter assignment that respects position eligibility.

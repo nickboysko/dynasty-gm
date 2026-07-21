@@ -12,6 +12,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-tab="trade-tab">Trade Builder</button>
       <button class="tab-btn" data-tab="report-tab">Report</button>
+      <button class="tab-btn" data-tab="fa-tab">Free Agents</button>
     </nav>
     <div class="opponent-picker" id="trade-tab-controls">
       <label for="opponent-select">Trade partner</label>
@@ -42,6 +43,23 @@
 
     <div id="report-tab" class="tab-panel">
       <section id="report-content"><p class="loading">Loading report...</p></section>
+    </div>
+
+    <div id="fa-tab" class="tab-panel">
+      <section id="fa-suggested"></section>
+      <section class="fa-controls">
+        <input type="text" id="fa-search" placeholder="Search by name...">
+        <div class="fa-pos-filters" id="fa-pos-filters">
+          <button class="pos-filter-btn active" data-pos="ALL">All</button>
+          <button class="pos-filter-btn" data-pos="QB">QB</button>
+          <button class="pos-filter-btn" data-pos="RB">RB</button>
+          <button class="pos-filter-btn" data-pos="WR">WR</button>
+          <button class="pos-filter-btn" data-pos="TE">TE</button>
+        </div>
+      </section>
+      <section class="report-section">
+        <div id="fa-table-container"><p class="loading">Loading free agents...</p></div>
+      </section>
     </div>
   </main>
 

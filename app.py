@@ -140,6 +140,8 @@ def asset_json(a):
         "value": a["value"],
         "untouchable": a.get("full_name", "").lower() in UNTOUCHABLES,
         "kind": "pick" if a["position"] == "PICK" else "player",
+        "injury_flag": a.get("injury_flag"),
+        "injury_body_part": a.get("injury_body_part"),
     }
 
 

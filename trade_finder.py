@@ -352,7 +352,10 @@ def _pos_annotations(my_surplus, send_assets, recv_assets):
 # ---------------------------------------------------------------------------
 
 def _asset_str(assets):
-    return " + ".join(f"{a['full_name']} ({a['position']}, {a['value']:,})" for a in assets)
+    def fmt(a):
+        flag = f" [{a['injury_flag']}]" if a.get("injury_flag") else ""
+        return f"{a['full_name']} ({a['position']}, {a['value']:,}){flag}"
+    return " + ".join(fmt(a) for a in assets)
 
 
 def _dynasty_warning(send_assets, recv_assets):

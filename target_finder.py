@@ -67,7 +67,7 @@ def find_target_player(name_query, rosters):
 
     # Still ambiguous
     options = "\n  ".join(
-        f"{p['full_name']} ({p['position']}, {p['value']:,}) -- {r['team']}"
+        f"{p['full_name']} ({p['position']}, {p['value']:,}){' [' + p['injury_flag'] + ']' if p.get('injury_flag') else ''} -- {r['team']}"
         for p, r in matches[:10]
     )
     raise SystemExit(f"Multiple matches for '{name_query}':\n  {options}\n\nBe more specific.")
@@ -140,7 +140,8 @@ def main():
     if target_tier.get("record_used"):
         record_str = f" {target_tier['wins']}-{target_tier['losses']}"
 
-    print(f"\n=== Target: {target['full_name']} ({pos}, {target['value']:,}){trend_str} ===")
+    injury_str = f"  [{target['injury_flag']}]" if target.get("injury_flag") else ""
+    print(f"\n=== Target: {target['full_name']} ({pos}, {target['value']:,}){trend_str}{injury_str} ===")
     print(f"Owner: {target_owner['team']} [{target_tier['tier']}{record_str}]{pick_note}")
 
     # -----------------------------------------------------------------------

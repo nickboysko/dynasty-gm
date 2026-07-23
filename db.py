@@ -87,6 +87,9 @@ def init_db():
         "ALTER TABLE rosters ADD COLUMN losses  INTEGER DEFAULT 0",
         "ALTER TABLE rosters ADD COLUMN ties    INTEGER DEFAULT 0",
         "ALTER TABLE rosters ADD COLUMN fpts    REAL    DEFAULT 0",
+        "ALTER TABLE players ADD COLUMN status            TEXT",
+        "ALTER TABLE players ADD COLUMN injury_status      TEXT",
+        "ALTER TABLE players ADD COLUMN injury_body_part   TEXT",
     ]:
         try:
             conn.execute(col_sql)

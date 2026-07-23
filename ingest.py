@@ -52,10 +52,14 @@ def ingest_players(conn, players_data):
         full_name = p.get("full_name") or (
             f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
         )
-        rows.append((pid, full_name, p.get("position"), p.get("team"), p.get("age"), p.get("years_exp")))
+        rows.append((
+            pid, full_name, p.get("position"), p.get("team"), p.get("age"), p.get("years_exp"),
+            p.get("status"), p.get("injury_status"), p.get("injury_body_part"),
+        ))
     conn.executemany(
-        "INSERT OR REPLACE INTO players (player_id, full_name, position, team, age, years_exp)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO players"
+        " (player_id, full_name, position, team, age, years_exp, status, injury_status, injury_body_part)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     return len(rows)

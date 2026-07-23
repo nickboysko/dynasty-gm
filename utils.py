@@ -17,6 +17,45 @@ UNTOUCHABLES = {
 # RBs cliff at 27-28, WRs at 30-32, TEs similar to WR, QBs latest.
 PRIME_CLIFF_AGE = {"QB": 33, "RB": 27, "WR": 30, "TE": 29}
 
+# Sleeper's weekly game-status designation, shortened for display.
+INJURY_STATUS_LABELS = {
+    "Questionable": "Q",
+    "Doubtful": "D",
+    "Out": "O",
+    "IR": "IR",
+    "PUP": "PUP",
+    "Sus": "SUSP",
+    "COV": "COV",
+    "DNR": "DNR",
+}
+
+# Sleeper's roster status, used as a fallback when there's no active weekly
+# designation (e.g. a player parked on IR/PUP with injury_status unset).
+ROSTER_STATUS_FLAGS = {
+    "Injured Reserve": "IR",
+    "Physically Unable to Perform": "PUP",
+    "Non Football Injury": "NFI",
+    "Inactive": "INA",
+}
+
+INJURY_SEVERE = {"O", "IR", "PUP", "D", "SUSP", "NFI", "INA"}
+
+
+def injury_flag(player):
+    """
+    Short risk badge ('Q', 'O', 'IR', ...) for a player, or None if there's
+    nothing to flag. Prefers the weekly injury_status (Questionable/Out/etc);
+    falls back to roster status (Injured Reserve/PUP/etc) for players parked
+    long-term with no active weekly designation.
+    """
+    inj = player.get("injury_status")
+    if inj and inj != "NA":
+        return INJURY_STATUS_LABELS.get(inj, inj)
+    status = player.get("status")
+    if status in ROSTER_STATUS_FLAGS:
+        return ROSTER_STATUS_FLAGS[status]
+    return None
+
 
 def filter_untouchables(players):
     """Drops players in UNTOUCHABLES from a list of sendable assets."""
@@ -82,14 +121,16 @@ def get_rosters(conn, fc_values):
         team = roster["team_name"] or roster["display_name"] or f"Roster {rid}"
 
         players = conn.execute("""
-            SELECT p.player_id, p.full_name, p.position, p.team, p.age, rp.slot
+            SELECT p.player_id, p.full_name, p.position, p.team, p.age, rp.slot,
+                   p.status, p.injury_status, p.injury_body_part
             FROM roster_players rp
             JOIN players p ON rp.player_id = p.player_id
             WHERE rp.roster_id = ?
         """, (rid,)).fetchall()
 
-        player_list = [
-            {
+        player_list = []
+        for p in players:
+            d = {
                 "player_id": p["player_id"],
                 "full_name": p["full_name"] or p["player_id"],
                 "position": p["position"],
@@ -97,9 +138,12 @@ def get_rosters(conn, fc_values):
                 "age": p["age"],
                 "slot": p["slot"],
                 "value": fc_values.get(p["player_id"], {}).get("value", 0),
+                "status": p["status"],
+                "injury_status": p["injury_status"],
+                "injury_body_part": p["injury_body_part"],
             }
-            for p in players
-        ]
+            d["injury_flag"] = injury_flag(d)
+            player_list.append(d)
 
         result.append({
             "roster_id": rid,
@@ -116,19 +160,27 @@ def get_rosters(conn, fc_values):
 def get_free_agents(conn, fc_values):
     """Returns all NFL players not on any roster (any slot), enriched with FC value."""
     rostered_ids = {r["player_id"] for r in conn.execute("SELECT DISTINCT player_id FROM roster_players").fetchall()}
-    all_players = conn.execute("SELECT player_id, full_name, position, team, age FROM players").fetchall()
-    return [
-        {
+    all_players = conn.execute(
+        "SELECT player_id, full_name, position, team, age, status, injury_status, injury_body_part FROM players"
+    ).fetchall()
+    result = []
+    for p in all_players:
+        if p["player_id"] in rostered_ids:
+            continue
+        d = {
             "player_id": p["player_id"],
             "full_name": p["full_name"] or p["player_id"],
             "position": p["position"],
             "team": p["team"],
             "age": p["age"],
             "value": fc_values.get(p["player_id"], {}).get("value", 0),
+            "status": p["status"],
+            "injury_status": p["injury_status"],
+            "injury_body_part": p["injury_body_part"],
         }
-        for p in all_players
-        if p["player_id"] not in rostered_ids
-    ]
+        d["injury_flag"] = injury_flag(d)
+        result.append(d)
+    return result
 
 
 def assign_starters(players, starting_slots):

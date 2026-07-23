@@ -1,4 +1,5 @@
 const POSITION_ORDER = ["QB", "RB", "WR", "TE", "PICK"];
+const SEVERE_INJURY_FLAGS = new Set(["O", "IR", "PUP", "D", "SUSP", "NFI", "INA"]);
 
 let MY_ROSTER_ID = null;
 let MY_TEAM_NAME = "";
@@ -91,8 +92,8 @@ function renderFaSuggested() {
     h4.textContent = "Worth dropping someone for -- beats your weakest player at that position";
     sec.appendChild(h4);
     sec.appendChild(buildTable(
-      ["Player", "Pos", "Team", "Age", "Value", "vs Your Roster"],
-      upgrades.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), compareCell(a)])
+      ["Player", "Pos", "Status", "Team", "Age", "Value", "vs Your Roster"],
+      upgrades.map(a => [a.full_name, a.position, a.injury_flag || "-", a.team || "-", a.age ?? "-", a.value.toLocaleString(), compareCell(a)])
     ));
   }
   if (topValue.length) {
@@ -100,8 +101,8 @@ function renderFaSuggested() {
     h4.textContent = "Highest value available";
     sec.appendChild(h4);
     sec.appendChild(buildTable(
-      ["Player", "Pos", "Team", "Age", "Value", "vs Your Roster"],
-      topValue.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), compareCell(a)])
+      ["Player", "Pos", "Status", "Team", "Age", "Value", "vs Your Roster"],
+      topValue.map(a => [a.full_name, a.position, a.injury_flag || "-", a.team || "-", a.age ?? "-", a.value.toLocaleString(), compareCell(a)])
     ));
   }
   if (trending.length) {
@@ -109,8 +110,8 @@ function renderFaSuggested() {
     h4.textContent = "Trending up 15%+ this week -- grab before your league notices";
     sec.appendChild(h4);
     sec.appendChild(buildTable(
-      ["Player", "Pos", "Team", "Age", "Value", "7d Change", "vs Your Roster"],
-      trending.map(a => [a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(), `+${a.trend_delta_pct.toFixed(1)}%`, compareCell(a)])
+      ["Player", "Pos", "Status", "Team", "Age", "Value", "7d Change", "vs Your Roster"],
+      trending.map(a => [a.full_name, a.position, a.injury_flag || "-", a.team || "-", a.age ?? "-", a.value.toLocaleString(), `+${a.trend_delta_pct.toFixed(1)}%`, compareCell(a)])
     ));
   }
   container.appendChild(sec);
@@ -124,13 +125,13 @@ function renderFaTable() {
     return true;
   });
   const rows = filtered.map(a => [
-    a.full_name, a.position, a.team || "-", a.age ?? "-", a.value.toLocaleString(),
+    a.full_name, a.position, a.injury_flag || "-", a.team || "-", a.age ?? "-", a.value.toLocaleString(),
     a.trend_delta_pct !== null ? `${a.trend_delta_pct >= 0 ? "+" : ""}${a.trend_delta_pct.toFixed(1)}%` : "-",
     compareCell(a),
   ]);
   const container = document.getElementById("fa-table-container");
   container.innerHTML = "";
-  container.appendChild(buildTable(["Player", "Pos", "Team", "Age", "Value", "7d Change", "vs Your Roster"], rows));
+  container.appendChild(buildTable(["Player", "Pos", "Status", "Team", "Age", "Value", "7d Change", "vs Your Roster"], rows));
 }
 
 async function loadReport() {
@@ -350,6 +351,14 @@ function renderRosterList(containerId, assets) {
   }
 }
 
+function injuryBadge(flag, bodyPart) {
+  const span = document.createElement("span");
+  span.className = "injury-badge " + (SEVERE_INJURY_FLAGS.has(flag) ? "severe" : "mild");
+  span.textContent = flag;
+  if (bodyPart) span.title = bodyPart;
+  return span;
+}
+
 function assetRow(a, name) {
   const row = document.createElement("label");
   row.className = "asset-row" + (a.untouchable ? " untouchable" : "");
@@ -362,6 +371,9 @@ function assetRow(a, name) {
   const ageStr = a.age ? `, age ${Math.round(a.age)}` : "";
   label.textContent = `${a.full_name} (${a.position}${ageStr}) — ${a.value.toLocaleString()}`;
   row.appendChild(label);
+  if (a.injury_flag) {
+    row.appendChild(injuryBadge(a.injury_flag, a.injury_body_part));
+  }
   if (a.untouchable) {
     const tag = document.createElement("span");
     tag.className = "tag";
@@ -606,6 +618,9 @@ function renderSide(card, side, sideView, ids, otherIds) {
     const chip = document.createElement("span");
     chip.className = "chip" + (a.untouchable ? " untouchable" : "");
     chip.textContent = `${a.full_name} (${a.value.toLocaleString()})`;
+    if (a.injury_flag) {
+      chip.appendChild(injuryBadge(a.injury_flag, a.injury_body_part));
+    }
     const remove = document.createElement("button");
     remove.textContent = "×";
     remove.title = "Remove";
@@ -672,11 +687,11 @@ function buildTradeSummaryText(view) {
   lines.push("The trade:");
   lines.push("");
   lines.push(`${view.send.team} sends:`);
-  for (const a of view.send.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})`);
+  for (const a of view.send.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})${a.injury_flag ? ` [${a.injury_flag}]` : ""}`);
   lines.push(`Total: ${view.send.total_value.toLocaleString()}`);
   lines.push("");
   lines.push(`${view.recv.team} sends:`);
-  for (const a of view.recv.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})`);
+  for (const a of view.recv.assets) lines.push(`- ${a.full_name} (${a.position}, ${a.value.toLocaleString()})${a.injury_flag ? ` [${a.injury_flag}]` : ""}`);
   lines.push(`Total: ${view.recv.total_value.toLocaleString()}`);
   lines.push("");
   lines.push(`My tool's verdict: ${view.fair ? "Fair" : "Not fair"} (value ratio ${view.value_ratio ? view.value_ratio.toFixed(2) : "n/a"}, tolerance +/-${Math.round(view.tolerance * 100)}%)`);
@@ -697,7 +712,7 @@ function buildTradeSummaryText(view) {
     const group = byPos[pos];
     if (!group || !group.length) continue;
     const label = pos === "PICK" ? "Picks" : pos;
-    lines.push(`${label}: ` + group.map(a => `${a.full_name} (${a.value.toLocaleString()})`).join(", "));
+    lines.push(`${label}: ` + group.map(a => `${a.full_name} (${a.value.toLocaleString()})${a.injury_flag ? ` [${a.injury_flag}]` : ""}`).join(", "));
   }
 
   lines.push("");

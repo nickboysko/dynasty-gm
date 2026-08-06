@@ -1,7 +1,7 @@
 import json
 import re
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import db
 
@@ -234,7 +234,10 @@ def get_value_trends(conn, days=7):
     Compares the latest fc_values fetch vs. the oldest fetch within `days` days.
     Returns {} if fewer than 2 distinct fetch dates exist in the window.
     """
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    # Timezone-aware to match fc_values.fetched_at (written via
+    # datetime.now(timezone.utc).isoformat() in ingest.py) -- comparing a
+    # naive cutoff string against aware-with-"+00:00" data is fragile.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
     fetch_dates = conn.execute(
         "SELECT DISTINCT substr(fetched_at, 1, 10) FROM fc_values WHERE fetched_at >= ? ORDER BY 1",

@@ -62,6 +62,7 @@ dynasty-gm/
 ├── utils.py            # Shared helpers used by all scripts
 ├── ingest_daily.bat    # Batch file for Windows Task Scheduler (runs 7am daily, local dev only)
 ├── render.yaml         # Render Blueprint (deployment config)
+├── gunicorn.conf.py     # post_fork hook -- runs startup/refresh inside the worker, not the master
 ├── DEPLOY.md           # One-time manual setup checklist for Render deployment
 ├── dynasty.db          # SQLite database (gitignored)
 ├── players_cache.json  # /players/nfl cache (gitignored, refresh max once/day)
@@ -164,7 +165,8 @@ Team tiers (Contending / Middle / Rebuilding):
 `app.py` is deployed on Render's free tier (`render.yaml`, gunicorn, `--workers 1` -- required, not tunable, since `STATE`/the update-lock/the background thread are in-process singletons). See `DEPLOY.md` for the one-time manual setup checklist (GitHub repos, Render env vars, PAT scoping). Key mechanics:
 
 - **Auth**: shared-password session gate (`APP_PASSWORD` + `SECRET_KEY` env vars), no-op if unset (local dev).
-- **Auto-refresh**: a background thread runs `ingest.main()` -> `load_state()` -> `db_backup.backup()`, kicked off at process boot, on any page load once the last refresh is >15 min old, or via the "Refresh Now" button (`POST /api/update/trigger`, polled via `GET /api/update/status`). Never blocks a request -- a full ingest takes ~60-120s.
+- **Worker startup**: `app.py`'s `start_worker()` (restore -> init_db -> load_state -> first background refresh) is called from `gunicorn.conf.py`'s `post_fork` hook, **not** at bare module-import time. Found the hard way (2026-08-06): gunicorn 26's master process imports `app.py` to validate the `app:app` callable before forking any workers -- if startup ran unconditionally at import time, its background thread would spawn and run to completion *inside the master*, which never serves HTTP (fork() doesn't carry running threads into the child worker). The worker that actually handles every request would inherit a frozen pre-fork snapshot of `STATE`/`UPDATE_STATUS` and never see any of that work -- classic split-brain, diagnosed by logging `os.getpid()`/`id(UPDATE_STATUS)` from both the background thread and the request handler and finding they didn't match. `start_worker()` is also called directly from `python app.py`'s `__main__` block for local dev, where there's no fork to worry about.
+- **Auto-refresh**: a background thread runs `ingest.main()` -> `load_state()` -> `db_backup.backup()`, kicked off via `start_worker()` at worker boot, on any page load once the last refresh is >15 min old, or via the "Refresh Now" button (`POST /api/update/trigger`, polled via `GET /api/update/status`, which also reports `started_at` so the UI can show elapsed time). Never blocks a request -- a full ingest takes ~60-120s.
 - **Persistence**: Render's free tier wipes local disk on every idle restart (~15 min), which would silently break `fc_values` trend tracking (needs 2+ distinct fetch dates) if left unaddressed. `db_backup.py` works around this with a dedicated **second, private** GitHub repo (never connected to Render's deploy trigger) used purely as blob storage for `dynasty.db` -- `restore()` before `db.init_db()` at startup, `backup()` after each successful ingest, orphan-commit + force-push so it stays at exactly one commit. No-op unless its three env vars are set.
 - **Cost**: free tier accepted deliberately -- cold start (~30-60s) plus a fresh background ingest on every ~15-min-idle wake is a known, accepted tradeoff, not a bug.
 

@@ -154,7 +154,6 @@ def _do_update():
     finally:
         UPDATE_STATUS["running"] = False
         _update_lock.release()
-        print(f"[_do_update] pid={os.getpid()} id={id(UPDATE_STATUS)} final status: {UPDATE_STATUS}", flush=True)
 
 
 def trigger_update_async():
@@ -352,7 +351,6 @@ def index():
 
 @app.route("/api/update/status")
 def api_update_status():
-    print(f"[api_update_status] pid={os.getpid()} id={id(UPDATE_STATUS)} serving: {UPDATE_STATUS}", flush=True)
     return jsonify(UPDATE_STATUS)
 
 

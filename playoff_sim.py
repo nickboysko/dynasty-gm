@@ -22,7 +22,7 @@ from collections import Counter, defaultdict
 
 import utils
 
-N_SIMULATIONS = 10000
+N_SIMULATIONS = 3000
 LEAGUE_AVG_WEEKLY_POINTS = 130.0   # rough superflex / 1PPR / 0.5 TE-premium prior
 SIGMA_PRIOR_PCT = 0.16             # flat weekly SD as % of league avg (preseason)
 SHRINK_FULL_WEEKS = 6              # weeks of real data until fully trusting empirical mu/sigma

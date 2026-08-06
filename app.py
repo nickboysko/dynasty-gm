@@ -11,6 +11,7 @@ db_backup.py for how data survives Render's free-tier disk wipes.
 
 import os
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
@@ -135,9 +136,18 @@ def _do_update():
         return  # an update is already running -- don't stack another one
     UPDATE_STATUS["running"] = True
     try:
+        t0 = time.time()
         ingest.main()
+        print(f"[_do_update] ingest.main() took {time.time() - t0:.1f}s", flush=True)
+
+        t0 = time.time()
         load_state()
+        print(f"[_do_update] load_state() took {time.time() - t0:.1f}s", flush=True)
+
+        t0 = time.time()
         db_backup.backup()  # no-op locally
+        print(f"[_do_update] db_backup.backup() took {time.time() - t0:.1f}s", flush=True)
+
         UPDATE_STATUS["last_success"] = datetime.now(timezone.utc).isoformat()
         UPDATE_STATUS["last_error"] = None
     except Exception as exc:

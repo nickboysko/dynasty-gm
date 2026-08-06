@@ -66,7 +66,12 @@ function setUpdateStatusUI(status) {
   el.classList.remove("running", "error");
   if (status.running) {
     el.classList.add("running");
-    text.textContent = "Updating...";
+    let elapsed = "";
+    if (status.started_at) {
+      const secs = Math.max(0, Math.round((Date.now() - new Date(status.started_at).getTime()) / 1000));
+      elapsed = ` (${Math.floor(secs / 60)}m ${secs % 60}s)`;
+    }
+    text.textContent = "Updating..." + elapsed;
     btn.disabled = true;
   } else if (status.last_error) {
     el.classList.add("error");

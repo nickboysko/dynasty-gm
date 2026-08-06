@@ -127,7 +127,7 @@ load_state()
 # ---------------------------------------------------------------------------
 
 _update_lock = threading.Lock()
-UPDATE_STATUS = {"running": False, "last_success": None, "last_error": None}
+UPDATE_STATUS = {"running": False, "last_success": None, "last_error": None, "started_at": None}
 AUTO_REFRESH_COOLDOWN_SECONDS = 900  # 15 min
 
 
@@ -135,6 +135,7 @@ def _do_update():
     if not _update_lock.acquire(blocking=False):
         return  # an update is already running -- don't stack another one
     UPDATE_STATUS["running"] = True
+    UPDATE_STATUS["started_at"] = datetime.now(timezone.utc).isoformat()
     try:
         t0 = time.time()
         ingest.main()

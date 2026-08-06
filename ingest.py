@@ -290,8 +290,10 @@ def main():
     try:
         consecutive_empty = 0
         for week in range(1, 23):  # covers regular season + playoffs
+            t0 = time.time()
             time.sleep(2)
             txns = sleeper.fetch_transactions(LEAGUE_ID, week)
+            print(f"  week {week}: {len(txns)} transactions ({time.time() - t0:.1f}s)", flush=True)
             if txns:
                 transactions_by_week[week] = txns
                 consecutive_empty = 0
@@ -312,8 +314,10 @@ def main():
     print(f"Fetching matchups (weeks 1-{fmt['playoff_week_start'] - 1})...")
     matchups_by_week = {}
     for week in range(1, fmt["playoff_week_start"]):
+        t0 = time.time()
         time.sleep(2)
         matchups_by_week[week] = sleeper.fetch_matchups(LEAGUE_ID, week)
+        print(f"  week {week}: {len(matchups_by_week[week])} entries ({time.time() - t0:.1f}s)", flush=True)
 
     # Decide whether to fetch FC values (skip if already fetched today)
     conn = db.get_connection()

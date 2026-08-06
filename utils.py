@@ -88,6 +88,9 @@ def load_settings(conn):
         "starting_slots": json.loads(s.get("starting_slots", "[]")),
         "draft_rounds": int(s.get("draft_rounds", 5)),
         "season": s.get("season", str(date.today().year)),
+        "playoff_teams": int(s.get("playoff_teams", 6)),
+        "playoff_week_start": int(s.get("playoff_week_start", 15)),
+        "current_week": int(s.get("current_week", 1)),
     }
 
 

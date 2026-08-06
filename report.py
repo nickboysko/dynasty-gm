@@ -3,6 +3,7 @@ from datetime import date
 from tabulate import tabulate
 
 import db
+from playoff_sim import compute_playoff_odds
 from utils import (
     POSITIONS,
     assign_starters,
@@ -276,6 +277,26 @@ def section_strategy(rosters, starting_slots, pick_assets):
     print("Contending (>=60%) = compete now  |  Middle = flexible  |  Rebuilding (<=35%) = accumulate picks")
 
 
+def section_playoff_odds(conn, rosters, settings):
+    """8. Playoff odds -- Monte Carlo sim of the remaining regular season."""
+    print("\n=== 8. Playoff Odds ===")
+    data = compute_playoff_odds(conn, rosters, settings)
+    if data.get("error"):
+        print(data["error"])
+        return
+
+    print(f"Week {data['current_week']} ({data['weeks_played']} played) -- "
+          f"top {data['playoff_teams']} of {len(data['teams'])} make playoffs")
+    headers = ["Team", "Record", "Playoff %", "Avg Final Wins", "Avg PF"]
+    table = [
+        [t["team"], f"{t['wins']}-{t['losses']}-{t['ties']}", f"{t['playoff_pct']:.1f}%",
+         f"{t['avg_final_wins']:.1f}", f"{t['avg_points_for']:,.0f}"]
+        for t in data["teams"]
+    ]
+    print(tabulate(table, headers=headers, tablefmt="simple"))
+    print(f"\nNote: {data['tiebreaker_note']}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -310,6 +331,7 @@ def main():
     section_pick_capital(rosters, fc_values, settings["draft_rounds"], traded_picks_rows)
     section_value_movers(trends)
     section_strategy(rosters, slots, pick_assets)
+    section_playoff_odds(conn, rosters, settings)
 
     conn.close()
 

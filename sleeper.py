@@ -48,6 +48,21 @@ def fetch_transactions(league_id, week):
     return _get(f"/league/{league_id}/transactions/{week}")
 
 
+def fetch_matchups(league_id, week):
+    """One entry per roster_id for the given week: roster_id, matchup_id
+    (two rosters sharing a matchup_id in the same week played each other),
+    points, starters, etc. Sleeper pre-generates the full season schedule,
+    so this returns real roster pairings even for future/unplayed weeks."""
+    return _get(f"/league/{league_id}/matchups/{week}")
+
+
+def fetch_nfl_state():
+    """Current real-world NFL week/season state (not league-specific).
+    Used to tell 'already played' weeks apart from future ones -- a real
+    shutout and an unplayed week both report points == 0."""
+    return _get("/state/nfl")
+
+
 def fetch_players():
     """Returns the full NFL player dict, reading from cache if it is less than 24 hours old."""
     if os.path.exists(PLAYERS_CACHE):

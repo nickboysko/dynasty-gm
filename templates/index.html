@@ -13,10 +13,16 @@
       <button class="tab-btn active" data-tab="trade-tab">Trade Builder</button>
       <button class="tab-btn" data-tab="report-tab">Report</button>
       <button class="tab-btn" data-tab="fa-tab">Free Agents</button>
+      <button class="tab-btn" data-tab="playoff-tab">Playoff Odds</button>
     </nav>
     <div class="opponent-picker" id="trade-tab-controls">
       <label for="opponent-select">Trade partner</label>
       <select id="opponent-select"></select>
+    </div>
+    <div class="update-status" id="update-status">
+      <span class="dot"></span>
+      <span id="update-status-text">-</span>
+      <button id="refresh-now-btn" type="button">Refresh Now</button>
     </div>
   </header>
 
@@ -61,6 +67,10 @@
       <section class="report-section">
         <div id="fa-table-container"><p class="loading">Loading free agents...</p></div>
       </section>
+    </div>
+
+    <div id="playoff-tab" class="tab-panel">
+      <section id="playoff-content"><p class="loading">Loading playoff odds...</p></section>
     </div>
   </main>
 

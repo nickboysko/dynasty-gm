@@ -1,0 +1,25 @@
+# Render Blueprint. In Render: New -> Blueprint -> connect this repo.
+# Secrets are `sync: false` -- enter their values by hand in Render's
+# dashboard after the first deploy; they are never committed here.
+#
+# --workers 1 is required, not tunable: STATE, the update-lock, and the
+# background refresh thread are in-process singletons. Multiple gunicorn
+# workers would each independently ingest and hold inconsistent state.
+services:
+  - type: web
+    name: dynasty-gm
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    envVars:
+      - key: APP_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_DATA_REPO_OWNER
+        sync: false
+      - key: GITHUB_DATA_REPO_NAME
+        sync: false

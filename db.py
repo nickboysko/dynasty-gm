@@ -80,6 +80,20 @@ def init_db():
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            -- One row per roster per week. Two rows sharing (season, week,
+            -- matchup_id) played each other that week. Rebuilt via INSERT OR
+            -- REPLACE every ingest so points update in place as games are
+            -- played; pairings/points for future weeks are already known
+            -- since Sleeper pre-generates the full season schedule.
+            CREATE TABLE IF NOT EXISTS matchups (
+                season      TEXT,
+                week        INTEGER,
+                roster_id   INTEGER,
+                matchup_id  INTEGER,
+                points      REAL,
+                PRIMARY KEY (season, week, roster_id)
+            );
         """)
     # Schema migrations — idempotent, safe to re-run
     for col_sql in [

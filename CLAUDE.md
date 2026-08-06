@@ -17,7 +17,7 @@ pip install -r requirements.txt
 # Fetch latest data from Sleeper + FantasyCalc (idempotent, safe to re-run)
 python ingest.py
 
-# Full roster strength report (7 sections)
+# Full roster strength report (8 sections, incl. playoff odds)
 python report.py
 
 # Trade finder — shows positional partners, rebuild targets, sell-side market
@@ -34,26 +34,35 @@ python analyze_managers.py
 # Interactive web trade builder — seed players/picks from either roster, get
 # generated packages, edit them live (add/remove assets, see value update)
 python app.py
-# then open http://127.0.0.1:5000 (local only)
+# then open http://127.0.0.1:5000 (no password prompt locally -- APP_PASSWORD unset)
 ```
+
+`app.py` also has a **Playoff Odds** tab (Monte Carlo sim of the remaining season,
+`playoff_sim.py`) and auto-refreshes its data in the background (a manual
+"Refresh Now" button is also available) -- see "Deployment" below for how this
+runs unattended once hosted.
 
 ## Architecture
 
 ```
 dynasty-gm/
 ├── ingest.py           # Fetches Sleeper + FantasyCalc data, writes to SQLite
-├── report.py           # 7-section roster strength report
+├── report.py           # 8-section roster strength report
 ├── trade_finder.py     # Trade partners, rebuild targets, sell-side market, generate_packages(_seeded) engine
 ├── target_finder.py    # "I want Player X — what should I offer?"
 ├── analyze_managers.py # Pick positions, trade value history, buy/sell signals
-├── app.py              # Flask web trade builder — seed/generate/edit packages live (127.0.0.1:5000)
-├── templates/          # index.html for app.py
+├── playoff_sim.py      # Monte Carlo playoff-odds simulator (real schedule + team strength)
+├── app.py              # Flask web app — trade builder, report, free agents, playoff odds
+├── db_backup.py         # Backs up/restores dynasty.db via a private GitHub repo (Render persistence)
+├── templates/          # index.html + login.html for app.py
 ├── static/             # app.js + style.css for app.py
 ├── db.py               # Schema + migrations, DB connection helper
 ├── sleeper.py          # Sleeper API client (curl_cffi, Cloudflare bypass)
 ├── fantasycalc.py      # FantasyCalc API client
 ├── utils.py            # Shared helpers used by all scripts
-├── ingest_daily.bat    # Batch file for Windows Task Scheduler (runs 7am daily)
+├── ingest_daily.bat    # Batch file for Windows Task Scheduler (runs 7am daily, local dev only)
+├── render.yaml         # Render Blueprint (deployment config)
+├── DEPLOY.md           # One-time manual setup checklist for Render deployment
 ├── dynasty.db          # SQLite database (gitignored)
 ├── players_cache.json  # /players/nfl cache (gitignored, refresh max once/day)
 ├── logs/               # Ingest log output from Task Scheduler (gitignored)
@@ -103,6 +112,7 @@ Key conventions:
 - `rosters` stores `wins/losses/ties/fpts` from Sleeper — added via `ALTER TABLE` migration in `init_db()`.
 - `traded_picks`: `original_roster_id` = Sleeper `roster_id` (whose slot), `current_roster_id` = Sleeper `owner_id` (who holds it now).
 - `transactions`: trade/waiver/FA history by week, keyed by `transaction_id`. INSERT OR REPLACE.
+- `matchups`: one row per roster per week (`season, week, roster_id` PK), `matchup_id` pairs the two rosters that played each other that week, `points` is that roster's score. INSERT OR REPLACE every ingest. Weeks `1..playoff_week_start-1` are fetched every run regardless of whether they've been played -- Sleeper pre-generates the full regular-season schedule before it's played. `league_settings` also carries `playoff_teams`, `playoff_week_start`, and `current_week` (derived from `/state/nfl`, since `points == 0` alone can't distinguish a real shutout from an unplayed week) -- see `playoff_sim.py`.
 
 ## utils.py — Shared Logic
 
@@ -147,7 +157,16 @@ Team tiers (Contending / Middle / Rebuilding):
 
 ## Daily Automation
 
-`ingest_daily.bat` runs `python ingest.py` and appends to `logs\ingest.log`. Registered as "DynastyGM Daily Ingest" in Windows Task Scheduler at 7:00 AM daily. Value trend features activate once 2+ distinct fetch dates exist in `fc_values`.
+`ingest_daily.bat` runs `python ingest.py` and appends to `logs\ingest.log`. Registered as "DynastyGM Daily Ingest" in Windows Task Scheduler at 7:00 AM daily. Value trend features activate once 2+ distinct fetch dates exist in `fc_values`. This is a **local-only** convenience for running scripts against your own machine's `dynasty.db` -- the deployed web app (below) has its own independent auto-refresh and doesn't depend on this task or your PC being on.
+
+## Deployment (2026-08-06)
+
+`app.py` is deployed on Render's free tier (`render.yaml`, gunicorn, `--workers 1` -- required, not tunable, since `STATE`/the update-lock/the background thread are in-process singletons). See `DEPLOY.md` for the one-time manual setup checklist (GitHub repos, Render env vars, PAT scoping). Key mechanics:
+
+- **Auth**: shared-password session gate (`APP_PASSWORD` + `SECRET_KEY` env vars), no-op if unset (local dev).
+- **Auto-refresh**: a background thread runs `ingest.main()` -> `load_state()` -> `db_backup.backup()`, kicked off at process boot, on any page load once the last refresh is >15 min old, or via the "Refresh Now" button (`POST /api/update/trigger`, polled via `GET /api/update/status`). Never blocks a request -- a full ingest takes ~60-120s.
+- **Persistence**: Render's free tier wipes local disk on every idle restart (~15 min), which would silently break `fc_values` trend tracking (needs 2+ distinct fetch dates) if left unaddressed. `db_backup.py` works around this with a dedicated **second, private** GitHub repo (never connected to Render's deploy trigger) used purely as blob storage for `dynasty.db` -- `restore()` before `db.init_db()` at startup, `backup()` after each successful ingest, orphan-commit + force-push so it stays at exactly one commit. No-op unless its three env vars are set.
+- **Cost**: free tier accepted deliberately -- cold start (~30-60s) plus a fresh background ingest on every ~15-min-idle wake is a known, accepted tradeoff, not a bug.
 
 ## Positional Career Curve Research Summary
 
@@ -161,11 +180,13 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 | Script | What it does |
 |---|---|
 | `ingest.py` | Daily Sleeper + FC fetch; transaction history; idempotent |
-| `report.py` | 7 sections: total value, positional value, starters vs bench, age, pick capital, value movers (needs trend data), strategy assessment |
+| `report.py` | 8 sections: total value, positional value, starters vs bench, age, pick capital, value movers (needs trend data), strategy assessment, playoff odds (`playoff_sim.py`) |
 | `trade_finder.py` | Positional partners, rebuild targets, sell-side market; dynasty + trend annotations |
 | `target_finder.py` | Input any player name, get fair packages from your roster to acquire them |
 | `analyze_managers.py` | Pick capital positions, trade value history, buy/sell signals |
-| `app.py` | Web UI, three tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback; "Find Trades (All Teams)" searches your top 5 ranked partners at once using only your-side seeds; "Copy for AI" exports a package as plain text -- both teams' tier/record plus your full roster -- for pasting into any AI chat), **Report** (the same 7 sections as `report.py`, reusing its `compute_*` functions), and **Free Agents** (every unrostered player with FC value > 0, search + position filter, "vs Your Roster" upgrade comparison against your weakest player at that position, "Suggested Pickups" callout) |
+| `playoff_sim.py` | Monte Carlo simulation (10,000 runs) of the remaining regular season using the real Sleeper schedule + a team-strength model (value-based prior, blending toward empirical weekly scoring as real weeks accumulate). Reports each team's % chance of making the playoffs. v1 is a standalone view; "how much does trading for X move my odds" is a deferred fast-follow, not yet wired into the trade builder. |
+| `app.py` | Web UI, four tabs: **Trade Builder** (pick a partner, seed players/picks from either roster, generate packages, edit any package live with instant fairness/dynasty/trend/surplus-impact feedback; "Find Trades (All Teams)" searches your top 5 ranked partners at once using only your-side seeds; "Copy for AI" exports a package as plain text -- both teams' tier/record plus your full roster -- for pasting into any AI chat), **Report** (the same 8 sections as `report.py`, reusing its `compute_*` functions), **Free Agents** (every unrostered player with FC value > 0, search + position filter, "vs Your Roster" upgrade comparison against your weakest player at that position, "Suggested Pickups" callout), and **Playoff Odds** (`playoff_sim.py`'s output). Password-gated when `APP_PASSWORD` is set (no-op locally); data auto-refreshes via a background ingest kicked off on boot and on any stale page load, plus a manual "Refresh Now" button -- see "Deployment" below. |
+| `db_backup.py` | Backs up/restores `dynasty.db` via a second, private GitHub repo (git-as-blob-storage, orphan-commit + force-push so it never accumulates history) -- works around Render's free tier wiping local disk on every idle restart, so value-trend and transaction history survive. No-op unless `GITHUB_TOKEN`/`GITHUB_DATA_REPO_OWNER`/`GITHUB_DATA_REPO_NAME` are set. |
 
 **Injury/status awareness** (2026-07-23): `players` table stores `status`/`injury_status`/`injury_body_part` from Sleeper's player dump; `utils.injury_flag()` derives a short badge (`Q`, `D`, `O`, `IR`, `PUP`, etc.) shown everywhere a player appears -- CLI trade output (`trade_finder.py`/`target_finder.py`), the Free Agents table's Status column, roster/trade-builder chips in `app.py` (color-coded by severity), and the Copy-for-AI text export.
 
@@ -177,9 +198,9 @@ From Apex Fantasy Leagues, Fantasy Footballers, 4for4, PFF (validated across mul
 
 ### Tier 1 — High impact, build next
 
-Researched 2026-07-23 (see "win-focused brainstorm" below for full context) — these two are the strongest candidates because they reuse infrastructure that already exists and, unlike start/sit, operate at a level where variance actually cancels out instead of dominating the signal:
+Researched 2026-07-23 (see "win-focused brainstorm" below for full context):
 
-1. **Playoff odds simulator** — Monte Carlo simulation of the remaining season (team strength distributions from `classify_teams` + the real remaining schedule from Sleeper) to answer "what are my realistic playoff odds, and how much does trading for X move them" — a season-long question, not a single-game one, so it sidesteps the irreducible weekly variance that killed start/sit (variance cancels out over many simulated games; it doesn't over one). Should surface trade-value-in-playoff-odds-terms directly in `trade_finder.py`/`app.py`, not just as a standalone standings page.
+1. ~~**Playoff odds simulator**~~ — **Built 2026-08-06** (`playoff_sim.py`). Monte Carlo simulation of the remaining season using team strength (value-based prior, blending toward empirical weekly scoring as real weeks accumulate) + the real remaining schedule from Sleeper. v1 is a standalone view (`app.py`'s Playoff Odds tab, `report.py`'s 8th section) -- **surfacing trade-value-in-playoff-odds-terms directly in `trade_finder.py`/`app.py`'s trade builder is still an explicit fast-follow, not yet built.**
 2. **Touchdown/efficiency regression detector** — compare actual TDs to expected TDs (from red zone opportunity / target share / carry share) to flag sell-high (overperforming volume) and buy-low (underperforming volume) candidates. This is a real, well-documented signal (unlike coverage-scheme matchup data, which research showed doesn't hold up — see below) and plugs directly into the existing sell-side-market/rebuild-target sections of `trade_finder.py`. Needs `nfl_data_py`/`nflverse` play-by-play data (the same dependency identified during start/sit research, already vetted -- see below) joined onto the existing `players` table via `nfl_data_py`'s `import_ids()`, which includes a `sleeper_id` column for a clean join — no fuzzy name-matching needed.
 3. **Recent league activity feed** — `ingest.py` already pulls every trade/waiver transaction into the `transactions` table weekly; nothing surfaces it. A simple "what did the league do this week" view is cheap (data's already there) and gives real intel on rivals tipping their hand (e.g. a rebuilder loading up on rookie RBs confirms their direction before you negotiate).
 

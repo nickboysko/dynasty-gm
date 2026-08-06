@@ -12,9 +12,13 @@ let REPORT_LOADED = false;
 let FA_LOADED = false;
 let FA_DATA = [];
 let FA_POS_FILTER = "ALL";
+let PLAYOFF_LOADED = false;
+let POLL_TIMER = null;
+let UPDATE_WAS_RUNNING = false;
 
 init();
 initTabs();
+initUpdateStatus();
 
 function initTabs() {
   const buttons = document.querySelectorAll(".tab-btn");
@@ -33,8 +37,122 @@ function initTabs() {
         FA_LOADED = true;
         loadFreeAgents();
       }
+      if (btn.dataset.tab === "playoff-tab" && !PLAYOFF_LOADED) {
+        PLAYOFF_LOADED = true;
+        loadPlayoffOdds();
+      }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Background auto-refresh status: poll while an update is running, and
+// soft-refresh whatever's currently loaded (no page navigation) once it
+// finishes -- covers both the auto-kick-on-load refresh and "Refresh Now".
+// ---------------------------------------------------------------------------
+
+function initUpdateStatus() {
+  document.getElementById("refresh-now-btn").addEventListener("click", async () => {
+    await postJSON("/api/update/trigger", {});
+    pollUpdateStatus();
+  });
+  pollUpdateStatus();
+}
+
+function setUpdateStatusUI(status) {
+  const el = document.getElementById("update-status");
+  const text = document.getElementById("update-status-text");
+  const btn = document.getElementById("refresh-now-btn");
+  el.classList.remove("running", "error");
+  if (status.running) {
+    el.classList.add("running");
+    text.textContent = "Updating...";
+    btn.disabled = true;
+  } else if (status.last_error) {
+    el.classList.add("error");
+    text.textContent = "Update failed";
+    btn.disabled = false;
+  } else if (status.last_success) {
+    text.textContent = "Updated " + new Date(status.last_success).toLocaleTimeString();
+    btn.disabled = false;
+  } else {
+    text.textContent = "Not updated yet";
+    btn.disabled = false;
+  }
+}
+
+async function pollUpdateStatus() {
+  let status;
+  try {
+    status = await fetchJSON("/api/update/status");
+  } catch (e) {
+    return;
+  }
+  setUpdateStatusUI(status);
+  if (status.running) {
+    UPDATE_WAS_RUNNING = true;
+    if (!POLL_TIMER) POLL_TIMER = setInterval(pollUpdateStatus, 3000);
+  } else {
+    if (POLL_TIMER) { clearInterval(POLL_TIMER); POLL_TIMER = null; }
+    if (UPDATE_WAS_RUNNING) {
+      UPDATE_WAS_RUNNING = false;
+      softReload();
+    }
+  }
+}
+
+async function refreshCoreData() {
+  const teamsData = await fetchJSON("/api/teams");
+  MY_TEAM_INFO = teamsData.my_tier;
+  MY_ASSETS = (await fetchJSON(`/api/roster/${MY_ROSTER_ID}`)).assets;
+  renderRosterList("my-roster-list", MY_ASSETS);
+  if (OPPONENT_ROSTER_ID) {
+    const data = await fetchJSON(`/api/roster/${OPPONENT_ROSTER_ID}`);
+    THEIR_ASSETS = data.assets;
+    OPPONENT_TEAM_INFO = { team: data.team, tier: data.tier, wins: data.wins, losses: data.losses, record_used: data.record_used };
+    renderRosterList("their-roster-list", THEIR_ASSETS);
+  }
+  Object.keys(ROSTER_ASSET_CACHE).forEach(k => delete ROSTER_ASSET_CACHE[k]);
+}
+
+function softReload() {
+  refreshCoreData();
+  if (REPORT_LOADED) loadReport();
+  if (FA_LOADED) loadFreeAgents();
+  if (PLAYOFF_LOADED) loadPlayoffOdds();
+}
+
+async function loadPlayoffOdds() {
+  const container = document.getElementById("playoff-content");
+  let data;
+  try {
+    data = await fetchJSON("/api/playoff_odds");
+  } catch (e) {
+    container.innerHTML = `<p class="error">${e.message}</p>`;
+    return;
+  }
+  container.innerHTML = "";
+  container.appendChild(renderPlayoffOdds(data));
+}
+
+function renderPlayoffOdds(data) {
+  if (data.error) {
+    const p = document.createElement("p");
+    p.className = "error";
+    p.textContent = data.error;
+    return p;
+  }
+  const table = buildTable(
+    ["Team", "Record", "Playoff %", "Avg Final Wins", "Avg PF"],
+    data.teams.map(t => [
+      t.team, `${t.wins}-${t.losses}-${t.ties}`, `${t.playoff_pct.toFixed(1)}%`,
+      t.avg_final_wins.toFixed(1), Math.round(t.avg_points_for).toLocaleString(),
+    ])
+  );
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent = `Week ${data.current_week} (${data.weeks_played} played) -- top ${data.playoff_teams} of ${data.teams.length} make playoffs. ${data.tiebreaker_note}`;
+  return reportSection("Playoff Odds (Monte Carlo, 10,000 sims)", table, note);
 }
 
 async function loadFreeAgents() {

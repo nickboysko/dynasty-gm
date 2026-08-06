@@ -1,21 +1,27 @@
 """
 Interactive trade builder web app.
 
-Run with: python app.py
-Serves a local-only (127.0.0.1) UI for building trades: pick a partner team,
-seed specific players/picks you want in the deal (from either roster), get
-generated packages built around those seeds, then edit any package live.
-
-Data is loaded once at startup from dynasty.db. Since the DB only changes via
-the daily 7am ingest, restart this app to pick up fresh data -- no polling.
+Run locally with: python app.py (127.0.0.1:5000, debug on, no auth).
+In production (Render), served by gunicorn on $PORT with a password gate --
+see render.yaml. Data auto-refreshes: a background ingest kicks off on boot
+and on any page load once the last refresh is stale, plus a manual
+"Refresh Now" button -- poll /api/update/status for progress. See
+db_backup.py for how data survives Render's free-tier disk wipes.
 """
 
-from flask import Flask, abort, jsonify, render_template, request
+import os
+import threading
+from datetime import datetime, timedelta, timezone
+
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
 import copy
 
 import db
+import db_backup
+import ingest
+from playoff_sim import compute_playoff_odds
 from utils import (
     POSITIONS,
     UNTOUCHABLES,
@@ -58,10 +64,16 @@ from report import (
 )
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-insecure-key-change-me")
+app.permanent_session_lifetime = timedelta(days=30)
+
+APP_PASSWORD = os.environ.get("APP_PASSWORD")  # auth gate is a no-op if unset (local dev)
 
 
 # ---------------------------------------------------------------------------
-# Startup: load league data once, hold it in memory for the process lifetime
+# Startup: load league data into an in-memory STATE singleton, kept fresh by
+# a background auto-refresh (see "Background auto-refresh" below) instead of
+# only ever loading once.
 # ---------------------------------------------------------------------------
 
 class State:
@@ -69,29 +81,85 @@ class State:
 
 
 STATE = State()
+_state_lock = threading.Lock()
 
 
 def load_state():
+    """Builds a scratch State() from the DB, then atomically swaps it into
+    the module-level STATE singleton. Safe to call repeatedly (e.g. after a
+    background ingest) -- the single dict-pointer swap means readers never
+    see a half-old/half-new STATE."""
     conn = db.get_connection()
-    STATE.settings = load_settings(conn)
-    STATE.fc_values = get_latest_fc_values(conn)
-    STATE.rosters = get_rosters(conn, STATE.fc_values)
-    pick_values = build_pick_value_table(STATE.fc_values)
-    STATE.pick_assets = compute_pick_assets(conn, STATE.rosters, STATE.settings["draft_rounds"], pick_values)
-    STATE.surplus = compute_positional_surplus(STATE.rosters, STATE.settings["starting_slots"])
-    STATE.tiers = classify_teams(STATE.rosters, STATE.settings["starting_slots"])
-    STATE.trends = get_value_trends(conn, days=7)
-    STATE.my_roster = find_my_roster(STATE.rosters, MY_TEAM)
-    STATE.roster_by_id = {r["roster_id"]: r for r in STATE.rosters}
-    STATE.traded_picks_rows = conn.execute(
+    s = State()
+    s.settings = load_settings(conn)
+    s.fc_values = get_latest_fc_values(conn)
+    s.rosters = get_rosters(conn, s.fc_values)
+    pick_values = build_pick_value_table(s.fc_values)
+    s.pick_assets = compute_pick_assets(conn, s.rosters, s.settings["draft_rounds"], pick_values)
+    s.surplus = compute_positional_surplus(s.rosters, s.settings["starting_slots"])
+    s.tiers = classify_teams(s.rosters, s.settings["starting_slots"])
+    s.trends = get_value_trends(conn, days=7)
+    s.my_roster = find_my_roster(s.rosters, MY_TEAM)
+    s.roster_by_id = {r["roster_id"]: r for r in s.rosters}
+    s.traded_picks_rows = conn.execute(
         "SELECT season, round, original_roster_id, current_roster_id FROM traded_picks"
     ).fetchall()
-    STATE.free_agents = get_free_agents(conn, STATE.fc_values)
+    s.free_agents = get_free_agents(conn, s.fc_values)
+    s.playoff_odds = compute_playoff_odds(conn, s.rosters, s.settings)
     conn.close()
+    with _state_lock:
+        STATE.__dict__ = s.__dict__
 
 
+db_backup.restore()  # no-op locally; on Render, pulls the last snapshot before init_db
 db.init_db()
 load_state()
+
+
+# ---------------------------------------------------------------------------
+# Background auto-refresh
+#
+# A full ingest run takes 60-120+ seconds (Sleeper rate-limit-friendly
+# sleeps), so it always runs off the request thread. Kicked off at process
+# boot (the common case: Render's cold start *is* the page load that woke
+# it), on any page load once stale, and unconditionally via "Refresh Now".
+# ---------------------------------------------------------------------------
+
+_update_lock = threading.Lock()
+UPDATE_STATUS = {"running": False, "last_success": None, "last_error": None}
+AUTO_REFRESH_COOLDOWN_SECONDS = 900  # 15 min
+
+
+def _do_update():
+    if not _update_lock.acquire(blocking=False):
+        return  # an update is already running -- don't stack another one
+    UPDATE_STATUS["running"] = True
+    try:
+        ingest.main()
+        load_state()
+        db_backup.backup()  # no-op locally
+        UPDATE_STATUS["last_success"] = datetime.now(timezone.utc).isoformat()
+        UPDATE_STATUS["last_error"] = None
+    except Exception as exc:
+        UPDATE_STATUS["last_error"] = str(exc)
+    finally:
+        UPDATE_STATUS["running"] = False
+        _update_lock.release()
+
+
+def trigger_update_async():
+    threading.Thread(target=_do_update, daemon=True).start()
+
+
+def _last_success_stale():
+    last = UPDATE_STATUS["last_success"]
+    if not last:
+        return True
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(last)
+    return age > timedelta(seconds=AUTO_REFRESH_COOLDOWN_SECONDS)
+
+
+trigger_update_async()  # kick off the first refresh as soon as the process boots
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +169,39 @@ load_state()
 @app.errorhandler(HTTPException)
 def handle_http_exception(e):
     return jsonify({"error": e.description}), e.code
+
+
+@app.before_request
+def require_login():
+    """No-op if APP_PASSWORD isn't set -- keeps local `python app.py` dev
+    working with zero config. Once deployed with the env var set, gates
+    everything except the login page and static assets behind one shared
+    password (no per-user accounts -- this is a personal tool, not a
+    product)."""
+    if not APP_PASSWORD:
+        return
+    if request.endpoint in ("login", "static"):
+        return
+    if not session.get("authed"):
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        if request.form.get("password") == APP_PASSWORD:
+            session.permanent = True
+            session["authed"] = True
+            return redirect(url_for("index"))
+        error = "Incorrect password."
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 def get_roster(roster_id):
@@ -212,7 +313,25 @@ def compute_surplus_impact(send_rid, send_assets, recv_rid, recv_assets):
 
 @app.route("/")
 def index():
+    if _last_success_stale():
+        trigger_update_async()
     return render_template("index.html")
+
+
+@app.route("/api/update/status")
+def api_update_status():
+    return jsonify(UPDATE_STATUS)
+
+
+@app.route("/api/update/trigger", methods=["POST"])
+def api_update_trigger():
+    trigger_update_async()
+    return jsonify(UPDATE_STATUS)
+
+
+@app.route("/api/playoff_odds")
+def api_playoff_odds():
+    return jsonify(STATE.playoff_odds)
 
 
 @app.route("/api/teams")
@@ -446,4 +565,11 @@ def api_evaluate():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Render sets $PORT and this block is never hit anyway (gunicorn imports
+    # app:app directly) -- this fallback just keeps `python app.py` working
+    # unchanged for local dev while being sane if ever run directly in prod.
+    port = int(os.environ.get("PORT", 5000))
+    if os.environ.get("PORT"):
+        app.run(host="0.0.0.0", port=port)
+    else:
+        app.run(host="127.0.0.1", port=port, debug=True)

@@ -27,6 +27,8 @@ def derive_league_format(league):
     starting_slots = [p for p in roster_positions if p not in NON_STARTING_SLOTS]
     draft_rounds = settings.get("draft_rounds", 5)
     season = league.get("season", str(datetime.now(timezone.utc).year))
+    playoff_teams = settings.get("playoff_teams", 6)
+    playoff_week_start = settings.get("playoff_week_start", 15)
 
     return {
         "superflex": superflex,
@@ -37,7 +39,26 @@ def derive_league_format(league):
         "roster_positions": roster_positions,
         "draft_rounds": draft_rounds,
         "season": season,
+        "playoff_teams": playoff_teams,
+        "playoff_week_start": playoff_week_start,
     }
+
+
+def derive_current_week(nfl_state, playoff_week_start):
+    """How many regular-season weeks are 'in the books' league-wide.
+
+    Sleeper's /state/nfl reports week=0 pre-season (points==0 everywhere is
+    ambiguous with a real shutout, so we need this rather than inferring from
+    points). Regular season uses the reported week directly; once the real
+    NFL season has moved into the postseason, treat the whole regular season
+    as played.
+    """
+    season_type = nfl_state.get("season_type")
+    if season_type == "regular":
+        return max(1, nfl_state.get("week", 1))
+    if season_type in ("post", "complete"):
+        return playoff_week_start
+    return 1  # pre-season / off-season: nothing played yet
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +208,26 @@ def ingest_fc_values(conn, fc_data, fetched_at):
     return len(rows)
 
 
-def save_league_settings(conn, fmt):
+def ingest_matchups(conn, season, matchups_by_week):
+    rows = []
+    for week, entries in matchups_by_week.items():
+        for m in entries:
+            rows.append((
+                season,
+                week,
+                m["roster_id"],
+                m.get("matchup_id"),
+                m.get("points") or 0.0,
+            ))
+    conn.executemany(
+        "INSERT OR REPLACE INTO matchups (season, week, roster_id, matchup_id, points)"
+        " VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows)
+
+
+def save_league_settings(conn, fmt, current_week):
     settings = {
         "superflex": str(fmt["superflex"]),
         "num_qbs": str(fmt["num_qbs"]),
@@ -197,6 +237,9 @@ def save_league_settings(conn, fmt):
         "roster_positions": json.dumps(fmt["roster_positions"]),
         "draft_rounds": str(fmt["draft_rounds"]),
         "season": str(fmt["season"]),
+        "playoff_teams": str(fmt["playoff_teams"]),
+        "playoff_week_start": str(fmt["playoff_week_start"]),
+        "current_week": str(current_week),
     }
     conn.executemany(
         "INSERT OR REPLACE INTO league_settings (key, value) VALUES (?, ?)",
@@ -260,6 +303,18 @@ def main():
         print(f"  Warning: transaction fetch stopped at week {week}: {exc}")
         print("  Proceeding with partial or no transaction data.")
 
+    time.sleep(2)
+    print("Fetching NFL state...")
+    nfl_state = sleeper.fetch_nfl_state()
+    current_week = derive_current_week(nfl_state, fmt["playoff_week_start"])
+    print(f"  season_type={nfl_state.get('season_type')} current_week={current_week}")
+
+    print(f"Fetching matchups (weeks 1-{fmt['playoff_week_start'] - 1})...")
+    matchups_by_week = {}
+    for week in range(1, fmt["playoff_week_start"]):
+        time.sleep(2)
+        matchups_by_week[week] = sleeper.fetch_matchups(LEAGUE_ID, week)
+
     # Decide whether to fetch FC values (skip if already fetched today)
     conn = db.get_connection()
     today = datetime.now(timezone.utc).date().isoformat()
@@ -277,7 +332,7 @@ def main():
 
     # Write everything atomically
     with conn:
-        save_league_settings(conn, fmt)
+        save_league_settings(conn, fmt, current_week)
 
         n = ingest_players(conn, players_data)
         print(f"\nUpserted {n} players")
@@ -294,6 +349,9 @@ def main():
         n = ingest_transactions(conn, fmt["season"], transactions_by_week)
         total_weeks = len(transactions_by_week)
         print(f"Ingested {n} transactions across {total_weeks} weeks")
+
+        n = ingest_matchups(conn, fmt["season"], matchups_by_week)
+        print(f"Ingested {n} matchup rows across {len(matchups_by_week)} weeks")
 
         if fc_data is not None:
             fetched_at = datetime.now(timezone.utc).isoformat()

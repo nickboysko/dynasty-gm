@@ -112,9 +112,6 @@ def load_state():
         STATE.__dict__ = s.__dict__
 
 
-db_backup.restore()  # no-op locally; on Render, pulls the last snapshot before init_db
-db.init_db()
-load_state()
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +169,29 @@ def _last_success_stale():
     return age > timedelta(seconds=AUTO_REFRESH_COOLDOWN_SECONDS)
 
 
-trigger_update_async()  # kick off the first refresh as soon as the process boots
+def start_worker():
+    """Runs restore -> init_db -> load_state -> first background refresh.
+
+    Must run inside the process that will actually SERVE requests, not just
+    at module-import time -- gunicorn's master may import this module (e.g.
+    to validate the app callable) before forking workers, and fork() does
+    not carry running threads into the child. If this ran unconditionally
+    at module level, a thread spawned in the master would complete real
+    work that the worker (which owns the STATE/UPDATE_STATUS the routes
+    actually read) would never see, since the worker gets a frozen
+    snapshot of module globals at fork time and no continuation of the
+    master's thread.
+
+    Called explicitly from the `__main__` block for local `python app.py`
+    (no fork involved there, so it's called directly), and from
+    gunicorn.conf.py's `post_fork` hook in production -- that hook is
+    gunicorn's documented way to run per-worker init that must happen
+    inside each actual worker process.
+    """
+    db_backup.restore()  # no-op locally; on Render, pulls the last snapshot before init_db
+    db.init_db()
+    load_state()
+    trigger_update_async()
 
 
 # ---------------------------------------------------------------------------
@@ -579,9 +598,11 @@ def api_evaluate():
 
 
 if __name__ == "__main__":
-    # Render sets $PORT and this block is never hit anyway (gunicorn imports
-    # app:app directly) -- this fallback just keeps `python app.py` working
-    # unchanged for local dev while being sane if ever run directly in prod.
+    # Local dev only -- gunicorn imports app:app directly and never hits this
+    # block, so it relies on gunicorn.conf.py's post_fork hook instead (see
+    # start_worker()'s docstring for why). No fork happens in this path, so
+    # it's safe to just call it directly.
+    start_worker()
     port = int(os.environ.get("PORT", 5000))
     if os.environ.get("PORT"):
         app.run(host="0.0.0.0", port=port)
